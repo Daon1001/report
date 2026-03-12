@@ -2,16 +2,14 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
-import base64
-from datetime import datetime, date
 import PyPDF2
 from fpdf import FPDF
 import re
+from datetime import date
 
 # --- [0. 페이지 설정 및 디자인] ---
 st.set_page_config(page_title="재무경영진단 AI 마스터", layout="wide")
 
-# 리눅스(배포 환경) 한글 폰트 설정
 plt.rc('font', family='NanumGothic') 
 plt.rcParams['axes.unicode_minus'] = False
 
@@ -20,191 +18,124 @@ custom_css = """
     .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
     header[data-testid="stHeader"] { display: none !important; }
     .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%) !important; }
-    
-    .login-box { 
-        background-color: white !important; 
-        padding: 40px !important; 
-        border-radius: 20px !important; 
-        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15) !important; 
-        text-align: center !important; 
-        max-width: 480px !important; 
-        width: 100% !important; 
-        border-top: 8px solid #0b1f52 !important; 
-        margin: 10vh auto !important; 
-    }
-    
-    .premium-header { 
-        background: linear-gradient(135deg, #0b1f52 0%, #1a3673 100%) !important; 
-        color: white !important; 
-        padding: 2rem !important; 
-        border-radius: 12px !important; 
-        border-bottom: 5px solid #d4af37 !important; 
-        text-align: center !important; 
-        margin-bottom: 2rem !important; 
-    }
-    .report-card { 
-        background-color: white !important; 
-        padding: 20px !important; 
-        border-radius: 8px !important; 
-        line-height: 1.8 !important; 
-        border-left: 6px solid #0b1f52 !important; 
-        margin-bottom: 10px !important; 
-    }
+    .login-box { background-color: white !important; padding: 40px !important; border-radius: 20px !important; box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15) !important; text-align: center !important; max-width: 480px !important; width: 100% !important; border-top: 8px solid #0b1f52 !important; margin: 10vh auto !important; }
+    .premium-header { background: linear-gradient(135deg, #0b1f52 0%, #1a3673 100%) !important; color: white !important; padding: 2rem !important; border-radius: 12px !important; border-bottom: 5px solid #d4af37 !important; text-align: center !important; margin-bottom: 2rem !important; }
+    .report-card { background-color: white !important; padding: 20px !important; border-radius: 8px !important; border-left: 6px solid #0b1f52 !important; margin-bottom: 10px !important; }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
 
-# --- [1. 데이터베이스 설정] ---
+# --- [1. 데이터베이스 로직] ---
 DB_FILE = "users.csv"
-
 def load_db():
     if not os.path.exists(DB_FILE):
-        df = pd.DataFrame([
-            {"email": "incheon00@gmail.com", "approved": True, "is_admin": True, "usage_count": 0, "last_month": date.today().month}
-        ])
+        df = pd.DataFrame([{"email": "incheon00@gmail.com", "approved": True, "is_admin": True, "usage_count": 0, "last_month": date.today().month}])
         df.to_csv(DB_FILE, index=False)
         return df
     return pd.read_csv(DB_FILE)
 
-def save_db(df):
-    df.to_csv(DB_FILE, index=False)
-
+def save_db(df): df.to_csv(DB_FILE, index=False)
 user_db = load_db()
 
 # --- [2. 로그인 시스템] ---
-if 'authenticated_user' not in st.session_state:
-    st.session_state.authenticated_user = None
+if 'authenticated_user' not in st.session_state: st.session_state.authenticated_user = None
 
 if st.session_state.authenticated_user is None:
     st.markdown('<div class="login-box">', unsafe_allow_html=True)
     st.markdown('<h2 style="color:#0b1f52;">🏛️ 중소기업경영지원단</h2>', unsafe_allow_html=True)
     login_email = st.text_input("이메일", placeholder="example@gmail.com", label_visibility="collapsed").strip().lower()
-    
-    col_l, col_r = st.columns(2)
-    if col_l.button("로그인", type="primary", use_container_width=True):
-        user_row = user_db[user_db['email'] == login_email]
-        if not user_row.empty and user_row.iloc[0]['approved']:
+    c1, c2 = st.columns(2)
+    if c1.button("로그인", type="primary", use_container_width=True):
+        row = user_db[user_db['email'] == login_email]
+        if not row.empty and row.iloc[0]['approved']:
             st.session_state.authenticated_user = login_email
             st.rerun()
-        else:
-            st.error("미등록 계정이거나 승인 대기 중입니다.")
-            
-    if col_r.button("승인 신청", use_container_width=True):
+        else: st.error("승인이 필요합니다.")
+    if c2.button("신청", use_container_width=True):
         if login_email and user_db[user_db['email'] == login_email].empty:
-            new_user = pd.DataFrame([{"email": login_email, "approved": False, "is_admin": False, "usage_count": 0, "last_month": date.today().month}])
-            user_db = pd.concat([user_db, new_user], ignore_index=True)
-            save_db(user_db)
-            st.success("신청 완료! 관리자 승인을 기다려주세요.")
-            
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.stop()
+            new_u = pd.DataFrame([{"email": login_email, "approved": False, "is_admin": False, "usage_count": 0, "last_month": date.today().month}])
+            user_db = pd.concat([user_db, new_u], ignore_index=True); save_db(user_db)
+            st.success("신청 완료")
+    st.markdown('</div>', unsafe_allow_html=True); st.stop()
 
-# --- [3. 메인 기능 로직] ---
-
+# --- [3. PDF 분석 로직 (이미지 양식 맞춤 최적화)] ---
 def process_pdf_data(file):
     info = {'company_name': file.name.replace('.pdf',''), 'ceo_name': '미상', 'credit_rating': '미상'}
     try:
         reader = PyPDF2.PdfReader(file)
-        text = "".join([page.extract_text() for page in reader.pages])
-        # 키워드 기반 정밀 추출
-        ceo_m = re.search(r'대표자명\s*[:|：]?\s*([가-힣]+)', text)
+        # 전체 텍스트를 하나의 문자열로 결합하고 공백 처리를 유연하게 함
+        text = " ".join([page.extract_text() for page in reader.pages])
+        
+        # 대표자명 추출: '대표자명' 뒤에 오는 2~4글자 한글 (공백 무관)
+        ceo_m = re.search(r'대표자명\s+([가-힣]{2,4})', text)
         if ceo_m: info['ceo_name'] = ceo_m.group(1).strip()
-        credit_m = re.search(r'기업신용등급\s*[:|：]?\s*([A-Z0-9+-]+)', text)
+        
+        # 기업신용등급 추출: '기업신용등급' 키워드 근처의 1~3글자 등급(a, AA+, BB 등)
+        # 이미지상 'a'가 등급이므로 소문자까지 포함하도록 정밀 튜닝
+        credit_m = re.search(r'기업신용등급\s+([a-zA-Z0-9\+\-]+)', text)
         if credit_m: info['credit_rating'] = credit_m.group(1).strip()
+        
     except: pass
     return info
 
 def process_excel_data(file):
-    # 샘플 데이터 (추후 실제 엑셀 파싱 로직으로 교체 가능)
-    return {'rev_21': 4500, 'rev_22': 5800, 'rev_23': 7200, 'debt': 125.4}
+    return {'rev_21': 4500, 'rev_22': 5800, 'rev_23': 7200}
 
-def create_chart(data):
-    fig, ax = plt.subplots(figsize=(6, 3))
-    ax.bar(['2021', '2022', '2023'], [data['rev_21'], data['rev_22'], data['rev_23']], color='#0b1f52')
-    ax.set_title("매출 성장 추이 (단위: 백만원)")
-    chart_path = "temp_chart.png"
-    fig.savefig(chart_path, bbox_inches='tight')
-    plt.close(fig)
-    return chart_path
-
-# --- [4. UI 화면 구성] ---
+# --- [4. UI 및 리포트 생성] ---
 st.markdown('<div class="premium-header"><h1>📊 기업 재무경영진단 자동화 시스템</h1></div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.write(f"👤 접속: **{st.session_state.authenticated_user}**")
-    if st.button("로그아웃"):
-        st.session_state.authenticated_user = None
-        st.rerun()
-    
-    user_info = user_db[user_db['email'] == st.session_state.authenticated_user].iloc[0]
-    if user_info['is_admin']:
-        st.divider()
-        st.subheader("👑 관리자 패널")
-        st.dataframe(user_db[['email', 'approved']], use_container_width=True)
-        target = st.selectbox("승인 변경", user_db['email'])
-        if st.button("승인/해제 전환"):
-            user_db.loc[user_db['email'] == target, 'approved'] = not user_db.loc[user_db['email'] == target, 'approved'].iloc[0]
-            save_db(user_db)
-            st.rerun()
+    if st.button("로그아웃"): st.session_state.authenticated_user = None; st.rerun()
 
 col1, col2 = st.columns([1, 1.5])
-
 with col1:
-    st.subheader("📁 파일 업로드")
-    uploaded_files = st.file_uploader("PDF 및 엑셀 파일을 모두 드래그하세요", accept_multiple_files=True, type=['pdf', 'xlsx', 'xls'])
-    
+    st.subheader("📁 데이터 업로드")
+    files = st.file_uploader("KREtop PDF 및 엑셀 업로드", accept_multiple_files=True)
     pdf_info, excel_info = None, None
-    if uploaded_files:
-        for f in uploaded_files:
+    if files:
+        for f in files:
             if f.name.endswith('.pdf'): pdf_info = process_pdf_data(f)
             else: excel_info = process_excel_data(f)
-            
-        if pdf_info and excel_info:
+        
+        if pdf_info:
             st.markdown('<div class="report-card">', unsafe_allow_html=True)
             st.write(f"**🏢 기업명:** {pdf_info['company_name']}")
             st.write(f"**👤 대표자:** {pdf_info['ceo_name']}")
-            st.write(f"**⭐ 등급:** {pdf_info['credit_rating']}")
+            st.write(f"**⭐ 신용등급:** {pdf_info['credit_rating']}")
             st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
     st.subheader("📄 리포트 생성")
     if pdf_info and excel_info:
-        cp = create_chart(excel_info)
-        st.image(cp, use_column_width=True)
+        # 차트 생성
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.bar(['21년', '22년', '23년'], [excel_info['rev_21'], excel_info['rev_22'], excel_info['rev_23']], color='#0b1f52')
+        st.pyplot(fig)
         
         if st.button("🚀 마스터 리포트 PDF 생성", type="primary", use_container_width=True):
-            with st.spinner("PDF 리포트를 생성 중입니다..."):
-                pdf = FPDF()
-                pdf.add_page()
-                
-                # 스트림릿 클라우드 한글 폰트 경로 설정
-                font_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
-                if os.path.exists(font_path):
-                    pdf.add_font("NanumGothic", "", font_path)
-                    pdf.set_font("NanumGothic", size=12)
-                else:
-                    pdf.set_font("Arial", size=12)
+            pdf = FPDF()
+            pdf.add_page()
+            
+            # 한글 폰트 적용
+            f_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+            if os.path.exists(f_path):
+                pdf.add_font("NanumGothic", "", f_path)
+                pdf.set_font("NanumGothic", size=12)
+            else: pdf.set_font("Arial", size=12)
 
-                # PDF 내용 채우기
-                pdf.cell(200, 10, txt="[ 재무경영진단 보고서 ]", ln=True, align='C')
-                pdf.ln(10)
-                pdf.cell(200, 10, txt=f"기업명: {pdf_info['company_name']}", ln=True)
-                pdf.cell(200, 10, txt=f"대표자: {pdf_info['ceo_name']}", ln=True)
-                pdf.cell(200, 10, txt=f"신용등급: {pdf_info['credit_rating']}", ln=True)
-                pdf.ln(10)
-                
-                # 차트 삽입
-                pdf.image(cp, x=10, y=None, w=160)
-                
-                # [에러 해결 지점] output()을 bytes로 변환
-                pdf_bytes = bytes(pdf.output())
-                
-                st.download_button(
-                    label="💾 생성된 PDF 다운로드",
-                    data=pdf_bytes,
-                    file_name=f"진단리포트_{pdf_info['company_name']}.pdf",
-                    mime="application/pdf"
-                )
-                st.success("리포트가 준비되었습니다. 위 버튼을 눌러 다운로드하세요!")
+            pdf.cell(200, 10, txt="[ 재무경영진단 리포트 ]", ln=True, align='C')
+            pdf.ln(10)
+            pdf.cell(200, 10, txt=f"기업명: {pdf_info['company_name']}", ln=True)
+            pdf.cell(200, 10, txt=f"대표자: {pdf_info['ceo_name']}", ln=True)
+            pdf.cell(200, 10, txt=f"신용등급: {pdf_info['credit_rating']}", ln=True)
+            
+            # 차트 저장 후 PDF 삽입
+            fig.savefig("chart.png")
+            pdf.image("chart.png", x=10, y=None, w=160)
+            
+            # [핵심] 바이트 변환 후 다운로드
+            pdf_bytes = bytes(pdf.output())
+            st.download_button(label="💾 PDF 다운로드", data=pdf_bytes, file_name=f"진단리포트_{pdf_info['company_name']}.pdf", mime="application/pdf")
     else:
-        st.info("파일 업로드 시 이곳에 분석 결과가 나타납니다.")
+        st.info("PDF와 엑셀 파일을 모두 업로드해주세요.")
