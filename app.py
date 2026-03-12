@@ -6,6 +6,8 @@ import base64
 from datetime import datetime, date
 import pdfkit
 import PyPDF2
+import shutil
+import re
 
 # --- [0. 페이지 설정 및 디자인 완전 강제 적용 CSS] ---
 st.set_page_config(page_title="재무경영진단 AI 마스터", layout="wide")
@@ -94,7 +96,6 @@ DB_FILE = "users.csv"
 
 def load_db():
     if not os.path.exists(DB_FILE):
-        # incheon00@gmail.com 최고 관리자 세팅
         initial_data = pd.DataFrame([
             {"email": "incheon00@gmail.com", "approved": True, "is_admin": True, "created_at": "2026-02-14", "usage_count": 0, "last_month": date.today().month},
             {"email": "manager@gmail.com", "approved": True, "is_admin": False, "created_at": "2026-02-14", "usage_count": 0, "last_month": date.today().month}
@@ -189,6 +190,19 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
+# 0. wkhtmltopdf 경로 강제 확인 함수
+def get_pdfkit_config():
+    path = shutil.which("wkhtmltopdf")
+    if not path:
+        if os.path.exists('/usr/bin/wkhtmltopdf'):
+            path = '/usr/bin/wkhtmltopdf'
+        elif os.path.exists('/usr/local/bin/wkhtmltopdf'):
+            path = '/usr/local/bin/wkhtmltopdf'
+            
+    if path:
+        return pdfkit.configuration(wkhtmltopdf=path)
+    return None
+
 # 1. 크레탑 엑셀 분석 함수 (재무 데이터)
 def process_excel_data(file):
     return {
@@ -199,23 +213,42 @@ def process_excel_data(file):
         'analysis_text': "전년 대비 매출이 견고하게 성장하고 있으며, 부채비율은 안정적인 수준을 유지하고 있습니다."
     }
 
-# 2. 크레탑 PDF 분석 함수 (기업개요, 신용등급 추출)
+# 2. 크레탑 PDF 분석 함수 (기업개요, 신용등급 실제 추출 로직 적용)
 def process_pdf_data(file):
     extracted_info = {
         'company_name': '미상',
         'ceo_name': '미상',
         'credit_rating': '미상'
     }
+    
     try:
         reader = PyPDF2.PdfReader(file)
-        text = ""
+        full_text = ""
+        # PDF 내의 모든 페이지 텍스트를 하나로 합침
         for page in reader.pages:
-            text += page.extract_text() + "\n"
+            full_text += page.extract_text() + "\n"
         
-        extracted_info['company_name'] = "(주)미다스엔지니어링 (PDF추출)" 
-        extracted_info['ceo_name'] = "허자현" # 대표님 성함으로 샘플 반영
-        extracted_info['credit_rating'] = "BB+"
+        # [정규표현식을 이용한 데이터 추출]
+        # 크레탑 문서 양식에서 흔히 쓰이는 키워드 주변의 데이터를 긁어옵니다.
         
+        # ① 기업명/업체명 추출 (예: '업체명 : (주)한국기업' 또는 '기업명 (주)한국기업')
+        company_match = re.search(r'(업체명|기업명|상호명?)\s*[:|：]?\s*([^\n\s]+)', full_text)
+        if company_match:
+            extracted_info['company_name'] = company_match.group(2).strip()
+        else:
+            # 문서에서 못 찾으면 업로드한 파일 이름에서 '.pdf'를 떼고 사용
+            extracted_info['company_name'] = file.name.replace(".pdf", "").replace("크레탑", "").strip()
+
+        # ② 대표자 추출 (예: '대표자 : 홍길동' 또는 '대표이사 홍길동')
+        ceo_match = re.search(r'(대표자|대표이사|대표자명)\s*[:|：]?\s*([가-힣]{2,4})', full_text)
+        if ceo_match:
+            extracted_info['ceo_name'] = ceo_match.group(2).strip()
+            
+        # ③ 신용등급 추출 (예: '신용등급 : BB+' 또는 '등급 BB+')
+        credit_match = re.search(r'(신용등급|등급)\s*[:|：]?\s*([A-Z0-9\+\-]+)', full_text)
+        if credit_match:
+            extracted_info['credit_rating'] = credit_match.group(2).strip()
+
     except Exception as e:
         st.error(f"PDF 텍스트 추출 중 오류가 발생했습니다: {e}")
         
@@ -240,7 +273,6 @@ col1, col2 = st.columns([1, 1.5])
 with col1:
     st.subheader("1️⃣ 데이터 동시 업로드")
     
-    # 여러 파일을 한 번에 올릴 수 있도록 accept_multiple_files=True 옵션 추가
     uploaded_files = st.file_uploader(
         "크레탑 자료 (PDF 및 엑셀)를 모두 드래그해서 올려주세요", 
         type=['pdf', 'xlsx', 'xls'], 
@@ -254,7 +286,6 @@ with col1:
     has_excel = False
     
     if uploaded_files:
-        # 업로드된 파일들을 순회하며 PDF인지 엑셀인지 판별하여 처리
         for file in uploaded_files:
             if file.name.lower().endswith('.pdf'):
                 pdf_data = process_pdf_data(file)
@@ -263,7 +294,6 @@ with col1:
                 excel_data = process_excel_data(file)
                 has_excel = True
         
-        # 두 가지 종류의 파일이 모두 업로드 되었을 때만 화면에 데이터 표시
         if has_pdf and has_excel:
             st.success("✅ PDF와 엑셀 파일이 모두 정상적으로 분석되었습니다!")
             st.markdown('<div class="report-card">', unsafe_allow_html=True)
@@ -273,6 +303,10 @@ with col1:
             st.write(f"**📈 23년 매출액:** {excel_data['revenue_2023']} 백만원")
             st.write(f"**⚖️ 부채비율:** {excel_data['debt_ratio']}%")
             st.markdown('</div>', unsafe_allow_html=True)
+            
+            # 추출 실패 시 안내 메시지
+            if pdf_data['credit_rating'] == '미상':
+                st.warning("⚠️ PDF에서 신용등급이나 대표자명을 자동으로 찾지 못했습니다. 크레탑 PDF 양식 내 단어(예: '업체명', '대표자', '등급') 형식이 다를 수 있습니다.")
         else:
             if not has_pdf:
                 st.warning("⚠️ 엑셀은 확인되었습니다. 신용등급이 포함된 **PDF 파일**도 함께 올려주세요.")
@@ -292,93 +326,94 @@ with col2:
                 st.error("월간 사용 한도를 초과했습니다.")
             else:
                 with st.spinner("최종 PDF 리포트를 생성하고 있습니다..."):
-                    report_date = date.today().strftime("%Y-%m-%d")
                     
-                    # HTML 템플릿 (미다스엔지니어링 디자인 + 신용등급/대표자 추가)
-                    html_template = f"""
-                    <html>
-                    <head>
-                        <meta charset="UTF-8">
-                        <style>
-                            @page {{ size: A4; margin: 0; }}
-                            body {{ font-family: 'Malgun Gothic', 'NanumGothic', sans-serif; margin: 0; padding: 0; color: #333; }}
-                            .page {{ width: 210mm; height: 297mm; padding: 20mm; box-sizing: border-box; page-break-after: always; }}
-                            .cover {{ background-color: #f4f7fa; text-align: center; display: flex; flex-direction: column; justify-content: center; height: 100vh; }}
-                            .cover h1 {{ font-size: 40pt; color: #1a2a5a; margin-bottom: 10px; }}
-                            .header {{ border-bottom: 2px solid #1a2a5a; padding-bottom: 10px; margin-bottom: 20px; }}
-                            .header h2 {{ color: #1a2a5a; margin: 0; }}
-                            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 30px; }}
-                            th {{ background-color: #1a2a5a; color: white; padding: 10px; border: 1px solid #ddd; }}
-                            td {{ padding: 10px; border: 1px solid #ddd; text-align: center; }}
-                            .summary-box {{ background-color: #eef2f7; padding: 20px; border-radius: 10px; margin-top: 20px; line-height: 1.6; }}
-                        </style>
-                    </head>
-                    <body>
-                        <div class="page cover">
-                            <p style="font-size: 20pt; color: #666;">재무경영진단 리포트</p>
-                            <h1>{pdf_data['company_name']}</h1>
-                            <p>작성일: {report_date}</p>
-                        </div>
+                    config = get_pdfkit_config()
+                    if config is None:
+                        st.error("🚨 서버에 wkhtmltopdf가 감지되지 않았습니다. 깃허브 최상단에 'packages.txt' 파일(내용: wkhtmltopdf)이 존재하는지 확인한 후, 우측 하단 탭 메뉴에서 'Reboot app'을 실행해 주세요.")
+                    else:
+                        report_date = date.today().strftime("%Y-%m-%d")
                         
-                        <div class="page">
-                            <div class="header">
-                                <h2>01. 기업 개요 및 신용등급</h2>
+                        html_template = f"""
+                        <html>
+                        <head>
+                            <meta charset="UTF-8">
+                            <style>
+                                @page {{ size: A4; margin: 0; }}
+                                body {{ font-family: 'Malgun Gothic', 'NanumGothic', sans-serif; margin: 0; padding: 0; color: #333; }}
+                                .page {{ width: 210mm; height: 297mm; padding: 20mm; box-sizing: border-box; page-break-after: always; }}
+                                .cover {{ background-color: #f4f7fa; text-align: center; display: flex; flex-direction: column; justify-content: center; height: 100vh; }}
+                                .cover h1 {{ font-size: 40pt; color: #1a2a5a; margin-bottom: 10px; }}
+                                .header {{ border-bottom: 2px solid #1a2a5a; padding-bottom: 10px; margin-bottom: 20px; }}
+                                .header h2 {{ color: #1a2a5a; margin: 0; }}
+                                table {{ width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 30px; }}
+                                th {{ background-color: #1a2a5a; color: white; padding: 10px; border: 1px solid #ddd; }}
+                                td {{ padding: 10px; border: 1px solid #ddd; text-align: center; }}
+                                .summary-box {{ background-color: #eef2f7; padding: 20px; border-radius: 10px; margin-top: 20px; line-height: 1.6; }}
+                            </style>
+                        </head>
+                        <body>
+                            <div class="page cover">
+                                <p style="font-size: 20pt; color: #666;">재무경영진단 리포트</p>
+                                <h1>{pdf_data['company_name']}</h1>
+                                <p>작성일: {report_date}</p>
                             </div>
-                            <table>
-                                <tr>
-                                    <th>기업명</th><td>{pdf_data['company_name']}</td>
-                                    <th>대표자</th><td>{pdf_data['ceo_name']}</td>
-                                </tr>
-                                <tr>
-                                    <th>신용등급</th><td colspan="3" style="font-weight: bold; color: #1a2a5a;">{pdf_data['credit_rating']}</td>
-                                </tr>
-                            </table>
+                            
+                            <div class="page">
+                                <div class="header">
+                                    <h2>01. 기업 개요 및 신용등급</h2>
+                                </div>
+                                <table>
+                                    <tr>
+                                        <th>기업명</th><td>{pdf_data['company_name']}</td>
+                                        <th>대표자</th><td>{pdf_data['ceo_name']}</td>
+                                    </tr>
+                                    <tr>
+                                        <th>신용등급</th><td colspan="3" style="font-weight: bold; color: #1a2a5a;">{pdf_data['credit_rating']}</td>
+                                    </tr>
+                                </table>
 
-                            <div class="header">
-                                <h2>02. 기업재무분석 요약</h2>
+                                <div class="header">
+                                    <h2>02. 기업재무분석 요약</h2>
+                                </div>
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>구분</th><th>2021년</th><th>2022년</th><th>2023년</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>매출액(백만원)</td>
+                                            <td>{excel_data['revenue_2021']}</td><td>{excel_data['revenue_2022']}</td><td>{excel_data['revenue_2023']}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                
+                                <div style="text-align: center; margin-top: 20px;">
+                                    <img src="{os.path.abspath(chart_path)}" width="450">
+                                </div>
+                                
+                                <div class="summary-box">
+                                    <strong>💡 컨설턴트 종합 진단</strong><br><br>
+                                    {excel_data['analysis_text']}
+                                </div>
                             </div>
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>구분</th><th>2021년</th><th>2022년</th><th>2023년</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td>매출액(백만원)</td>
-                                        <td>{excel_data['revenue_2021']}</td><td>{excel_data['revenue_2022']}</td><td>{excel_data['revenue_2023']}</td>
-                                    </tr>
-                                </tbody>
-                            </table>
+                        </body>
+                        </html>
+                        """
+                        
+                        try:
+                            options = {'enable-local-file-access': None, 'encoding': 'UTF-8'}
+                            pdf_bytes = pdfkit.from_string(html_template, False, options=options, configuration=config)
                             
-                            <div style="text-align: center; margin-top: 20px;">
-                                <img src="{os.path.abspath(chart_path)}" width="450">
-                            </div>
+                            user_db.at[idx, 'usage_count'] += 1
+                            save_db(user_db)
                             
-                            <div class="summary-box">
-                                <strong>💡 컨설턴트 종합 진단</strong><br><br>
-                                {excel_data['analysis_text']}
-                            </div>
-                        </div>
-                    </body>
-                    </html>
-                    """
-                    
-                    try:
-                        # PDF 변환 실행
-                        options = {'enable-local-file-access': None, 'encoding': 'UTF-8'}
-                        pdf_bytes = pdfkit.from_string(html_template, False, options=options)
-                        
-                        # 사용량 증가 및 저장
-                        user_db.at[idx, 'usage_count'] += 1
-                        save_db(user_db)
-                        
-                        # 다운로드 버튼 생성
-                        b64 = base64.b64encode(pdf_bytes).decode()
-                        download_name = pdf_data['company_name'].replace(" ", "_").replace("(", "").replace(")", "")
-                        href = f'<a href="data:application/octet-stream;base64,{b64}" download="재무경영진단_{download_name}.pdf" style="display: block; background-color: #1a3673; color: white; text-align: center; padding: 15px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">💾 마스터 리포트 다운로드 클릭</a>'
-                        st.markdown(href, unsafe_allow_html=True)
-                        st.success("✅ 엑셀과 PDF가 병합된 리포트가 성공적으로 생성되었습니다!")
-                        
-                    except Exception as e:
-                        st.error(f"PDF 생성 중 오류 발생. 서버에 wkhtmltopdf가 설치되어 있는지 확인하세요. 에러내용: {e}")
+                            b64 = base64.b64encode(pdf_bytes).decode()
+                            download_name = pdf_data['company_name'].replace(" ", "_").replace("(", "").replace(")", "")
+                            href = f'<a href="data:application/octet-stream;base64,{b64}" download="재무경영진단_{download_name}.pdf" style="display: block; background-color: #1a3673; color: white; text-align: center; padding: 15px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">💾 마스터 리포트 다운로드 클릭</a>'
+                            st.markdown(href, unsafe_allow_html=True)
+                            st.success("✅ 엑셀과 PDF가 병합된 리포트가 성공적으로 생성되었습니다!")
+                            
+                        except Exception as e:
+                            st.error(f"PDF 생성 중 알 수 없는 오류가 발생했습니다: {e}")
