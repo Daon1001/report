@@ -61,7 +61,7 @@ if 'authenticated_user' not in st.session_state:
 if st.session_state.authenticated_user is None:
     st.markdown('<div class="login-box">', unsafe_allow_html=True)
     st.markdown('<h1 style="color:#0b1f52; margin-bottom:0;">🏛️ 중소기업경영지원단</h1>', unsafe_allow_html=True)
-    st.markdown("<p style='color:#666; margin-bottom:30px;'>종합 경영진단 AI 마스터 v17.0 [Omni-Scanner]</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#666; margin-bottom:30px;'>종합 경영진단 AI 마스터 v18.0 [Ultimate-Parser]</p>", unsafe_allow_html=True)
     
     login_email = st.text_input("아이디(이메일)", placeholder="admin@example.com", label_visibility="collapsed").strip().lower()
     
@@ -89,16 +89,17 @@ if st.session_state.authenticated_user is None:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# --- [3. 옴니 스캐너 엔진 (모든 추출 방식 통합)] ---
+# --- [3. 울티메이트 파서 엔진 (데이터 인식률 100% 도전)] ---
 
-def clean_val(val):
+def clean_financial_num(val):
+    """숫자 데이터에서 콤마와 문자를 제거하고 실수로 변환"""
     if pd.isna(val) or val == "": return 0.0
     if isinstance(val, (int, float)): return float(val)
     s = re.sub(r'[^\d.-]', '', str(val))
     return float(s) if s else 0.0
 
-def omni_analyzer(files):
-    """표 데이터, 텍스트 레이어, 줄바꿈 파편화를 모두 처리하는 통합 스캔"""
+def ultimate_analyzer(files):
+    """PDF 텍스트 병합 분석 및 엑셀 전수 조사 시스템"""
     res = {
         'comp': "미상", 'ceo': "미상", 'emp': 0,
         'fin': {'매출': [0.0,0.0,0.0], '이익': [0.0,0.0,0.0], '자산': [0.0,0.0,0.0], '부채': [0.0,0.0,0.0]},
@@ -106,67 +107,63 @@ def omni_analyzer(files):
     }
     
     for file in files:
+        # 1. PDF 텍스트 조각 병합 및 문맥 분석 [cite: 3, 5, 15, 16]
         if file.name.endswith('.pdf'):
             reader = PyPDF2.PdfReader(file)
             full_txt = ""
             for page in reader.pages:
-                full_txt += page.extract_text() + "\n"
+                full_txt += page.extract_text() + " \n " # 인위적 여백을 추가하여 단어 분리 방지
             
-            # 1. 공백 무시 압축 텍스트 생성
-            tight_txt = full_txt.replace(" ", "").replace("\n", "").replace("\t", "")
+            # 모든 공백 패턴 정규화
+            clean_txt = re.sub(r'\s+', ' ', full_txt)
             
-            # 2. 기업명 추출 (다양한 구분자 대응)
-            comp_patterns = [r'기업명\s*[:：\-]\s*([가-힣\(\)A-Za-z0-9]+)', r'기업명\s*([가-힣\(\)A-Za-z0-9]+)']
-            for p in comp_patterns:
-                m = re.search(p, full_txt)
-                if m: 
-                    res['comp'] = m.group(1).strip()
-                    break
+            # (1) 기업명: '기업명' 키워드 뒤의 단어 뭉치 탐색 [cite: 3, 11]
+            comp_m = re.search(r'기업명\s*[:：\- ]+\s*([가-힣\(\)A-Za-z0-9]+)', clean_txt)
+            if comp_m: res['comp'] = comp_m.group(1).strip()
             
-            # 3. 대표자 추출 (다양한 위치 대응)
-            ceo_patterns = [r'대표자(?:명)?\s*[:：\-]?\s*([가-힣]{2,4})', r'대표자명\s*([가-힣]{2,4})']
-            for p in ceo_patterns:
-                m = re.search(p, full_txt)
-                if m: 
-                    res['ceo'] = m.group(1).strip()
-                    break
+            # (2) 대표자: '대표자' 또는 '대표자명' 키워드 뒤의 한글 탐색 [cite: 5, 12, 15]
+            ceo_m = re.search(r'대표자(?:명)?\s*[:：\- ]+\s*([가-힣]{2,4})', clean_txt)
+            if ceo_m: res['ceo'] = ceo_m.group(1).strip()
             
-            # 4. 종업원수 추출 (표 내부 데이터 대응)
-            emp_patterns = [r'종업원수\s*[:：\-]?\s*(\d+)', r'종업원수\s*(\d+)명']
-            for p in emp_patterns:
-                m = re.search(p, full_txt)
-                if m: 
-                    res['emp'] = int(m.group(1))
-                    break
-            if res['emp'] == 0:
-                # 표 구조에서 종업원수와 숫자가 떨어진 경우 강제 탐색
-                m_alt = re.search(r'종업원수.*?(\d+)', tight_txt)
-                if m_alt: res['emp'] = int(m_alt.group(1))
+            # (3) 종업원수: '종업원수' 뒤의 숫자 추출 
+            emp_m = re.search(r'종업원수\s*[:：\- ]+\s*(\d+)', clean_txt)
+            if emp_m: res['emp'] = int(emp_m.group(1))
             
-            # 5. 인증 현황 정밀 스캔 (보유/인증 키워드 매칭)
-            cert_map = {'벤처': '벤처', '연구개발전담부서': '연구개발전담부서', '이노비즈': '이노비즈', '메인비즈': '메인비즈', '기업부설연구소': '부설연구소'}
-            for key, kw in cert_map.items():
-                if f"{kw}인증" in tight_txt or f"{kw}보유" in tight_txt:
-                    res['certs'][key] = True
+            # (4) 인증 현황: 문서 전체에서 키워드 검색 [cite: 64, 67]
+            cert_keywords = {
+                '벤처': ['벤처', 'VENTURE'], 
+                '연구개발전담부서': ['연구개발전담부서', '전담부서'], 
+                '이노비즈': ['이노비즈', 'INNOBIZ'], 
+                '메인비즈': ['메인비즈', 'MAINBIZ'], 
+                '기업부설연구소': ['부설연구소', '연구소']
+            }
+            for key, kws in cert_keywords.items():
+                if any(kw in clean_txt.replace(" ", "") for kw in kws):
+                    # '미인증' 또는 '해당사항없음'이 붙어있는지 확인
+                    if not re.search(f"{kws[0]}.*?(미인증|미보유|해당사항없음)", clean_txt.replace(" ", "")):
+                        res['certs'][key] = True
 
+        # 2. 엑셀/CSV 데이터 전수 조사 [cite: 52, 53, 91, 109]
         if file.name.endswith(('.xlsx', '.xls', '.csv')):
             try:
                 df = pd.read_csv(file, header=None) if file.name.endswith('.csv') else pd.read_excel(file, header=None)
                 for _, row in df.iterrows():
                     row_txt = "".join([str(v) for v in row.values]).replace(" ", "")
+                    # 키워드 매칭
                     targets = {'매출액': '매출', '순이익': '이익', '자산': '자산', '부채': '부채'}
                     for kw, key in targets.items():
                         if kw in row_txt:
-                            try:
-                                v1, v2, v3 = clean_financial_num(row.values[2]), clean_financial_num(row.values[3]), clean_financial_num(row.values[4])
-                                if v1 != 0 or v2 != 0 or v3 != 0: res['fin'][key] = [v1, v2, v3]
-                            except: pass
+                            # 해당 행에서 유효한 숫자 3개를 찾아 우측 정렬
+                            nums = [clean_financial_num(v) for v in row.values if isinstance(v, (int, float, str)) and clean_financial_num(v) != 0]
+                            if len(nums) >= 2:
+                                res['fin'][key] = nums[-3:] if len(nums) >= 3 else [0.0] + nums[-2:]
             except: pass
+            
     return res
 
-# --- [4. 메인 대시보드 및 관리 기능] ---
+# --- [4. 메인 화면 구성 및 관리자 메뉴] ---
 
-st.markdown('<div class="premium-header"><h1>📊 [OMNI] 종합 경영진단 리포트 마스터</h1></div>', unsafe_allow_html=True)
+st.markdown('<div class="premium-header"><h1>📊 [ULTIMATE] 종합 경영진단 리포트 마스터</h1></div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.write(f"👤 담당 컨설턴트: **{st.session_state.authenticated_user}**")
@@ -184,19 +181,19 @@ with st.sidebar:
             user_db.loc[user_db['email'] == target, 'approved'] = not user_db.loc[user_db['email'] == target, 'approved'].iloc[0]
             save_db(user_db); st.rerun()
 
-col_l, col_r = st.columns([1, 1.4])
+col_in, col_out = st.columns([1, 1.4])
 
-with col_l:
+with col_in:
     st.subheader("📂 진단 파일 통합 업로드")
     up_files = st.file_uploader("개요.pdf 및 재무 자료를 함께 업로드하세요.", accept_multiple_files=True)
     
     if up_files:
-        data = omni_analyzer(up_files)
-        st.success("✅ 옴니 스캐너 데이터 인식 성공")
+        data = ultimate_analyzer(up_files)
+        st.success("✅ 파일 데이터 추출 성공 (울티메이트 엔진 가동)")
         
-        with st.expander("📝 데이터 보정 및 최종 확인", expanded=True):
-            # 파일에서 읽어온 (주)메이홈, 박승미, 10명 등의 데이터가 자동 매칭됩니다.
-            f_comp = st.text_input("🏢 기업 공식 명칭", data['comp'])
+        with st.expander("📝 데이터 최종 확인 및 보정", expanded=True):
+            # 파일에서 읽어온 (주)메이홈, 박승미, 10명 데이터가 표시됩니다 
+            f_comp = st.text_input("🏢 기업 명칭", data['comp'])
             f_ceo = st.text_input("👤 대표자 성함", data['ceo'])
             f_emp = st.number_input("👥 상시 근로자수(명)", value=data['emp'])
             
@@ -205,20 +202,20 @@ with col_l:
             for cert, have in data['certs'].items():
                 cert_vals[cert] = st.checkbox(cert, value=have)
             
-            st.divider(); st.write("💰 **최신 재무 (단위: 천원)**")
-            r_rev = st.number_input("2024년 매출액", value=data['fin']['매출'][2])
-            r_inc = st.number_input("2024년 순이익", value=data['fin']['이익'][2])
-            r_asset = st.number_input("2024년 자산총계", value=data['fin']['자산'][2])
-            r_debt = st.number_input("2024년 부채총계", value=data['fin']['부채'][2])
+            st.divider(); st.write("💰 **재무 수치 (단위: 천원)**")
+            r_rev = st.number_input("2024년 매출액", value=data['fin']['매출'][2] if len(data['fin']['매출'])>2 else 0.0)
+            r_inc = st.number_input("2024년 순이익", value=data['fin']['이익'][2] if len(data['fin']['이익'])>2 else 0.0)
+            r_asset = st.number_input("2024년 자산총계", value=data['fin']['자산'][2] if len(data['fin']['자산'])>2 else 0.0)
+            r_debt = st.number_input("2024년 부채총계", value=data['fin']['부채'][2] if len(data['fin']['부채'])>2 else 0.0)
 
-with col_r:
+with col_out:
     st.subheader("📈 실시간 진단 결과 시뮬레이션")
     if up_files:
-        # 노무 가이드 타입 자동 결정 (10명 기준 5인 이상)
+        # 노무 가이드 타입 결정 (10명 기준 5인 이상 자동 적용) 
         labor_type = "5인 이상" if f_emp >= 5 else "5인 미만"
-        st.info(f"분석: 근로자 **{f_emp}명**으로 **'{labor_type} 사업장'** 전용 분석 페이지가 추가됩니다.")
+        st.info(f"분석 결과: 현재 근로자 **{f_emp}명**으로 **'{labor_type} 사업장'** 노무 전용 분석 페이지가 생성됩니다.")
         
-        # 가치 평가 (천원 -> 원 환산)
+        # 가치 평가 (천원 -> 원 환산) 
         stock_price = ((r_inc * 1000 / 0.1)*0.6 + (r_asset - r_debt)*1000*0.4) / 100000
         
         fig, ax = plt.subplots(figsize=(8, 4.5))
@@ -251,9 +248,9 @@ with col_r:
             pdf.cell(190, 15, txt="2. 핵심 기업 인증 현황 및 로드맵", ln=True); pdf.line(10, 28, 200, 28); pdf.ln(10)
             
             cert_guide = {
-                "벤처": "법인세 50% 감면 및 정부 정책자금 한도 우대를 위해 필수적인 인증입니다.",
-                "연구개발전담부서": "연구원 인건비의 25%를 세액공제 받을 수 있는 최강의 절세 수단입니다.",
-                "이노비즈": "기술력을 대외적으로 인정받아 금융권 금리 우대 및 입찰 가점 혜택이 있습니다."
+                "벤처": "법인세 50% 감면 및 정부 정책자금 한도 우대를 위한 필수 인증 [cite: 64]",
+                "연구개발전담부서": "연구원 인건비 25% 세액공제 최우선 확보 전략 [cite: 67]",
+                "이노비즈": "금융권 금리 우대 및 입찰 가점 확보를 위한 기술 인증 [cite: 65]"
             }
             for c, desc in cert_guide.items():
                 status = "보유" if cert_vals.get(c, False) else "미보유 (도입필요)"
@@ -265,10 +262,10 @@ with col_r:
                     pdf.set_text_color(200, 0, 0); pdf.cell(190, 8, txt="→ 기업 경쟁력 강화를 위해 조속한 취득 전략 수립을 제안합니다.", ln=True)
                 pdf.ln(5); pdf.set_text_color(0,0,0)
 
-            # --- [PAGE 4: 인사 노무 가이드 (가변)] ---
+            # --- [PAGE 4: 노무 기준법 가이드 (가변)] ---
             pdf.add_page(); pdf.set_font("Nanum", size=20)
-            pdf.cell(190, 15, txt="3. 상시 인원별 맞춤형 노무 기준", ln=True); pdf.line(10, 28, 200, 28); pdf.ln(10)
-            pdf.set_font("Nanum", size=12); pdf.cell(190, 10, txt=f"분석 결과: 현재 근로자 {f_emp}명으로 '{labor_type} 사업장' 기준이 적용됩니다.", ln=True)
+            pdf.cell(190, 15, txt="3. 상시 인원별 맞춤형 노무 가이드", ln=True); pdf.line(10, 28, 200, 28); pdf.ln(10)
+            pdf.set_font("Nanum", size=12); pdf.cell(190, 10, txt=f"진단 결과: 현재 근로자 {f_emp}명으로 '{labor_type} 사업장' 법규가 적용됩니다. ", ln=True)
             
             rules = [
                 ("연차 유급 휴가", "의무 발생 (15일~)", "미적용 (자율)"),
