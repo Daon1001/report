@@ -20,7 +20,7 @@ custom_css = """
     .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%) !important; }
     .login-box { background-color: white !important; padding: 40px !important; border-radius: 20px !important; box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15) !important; text-align: center !important; max-width: 480px !important; width: 100% !important; border-top: 8px solid #0b1f52 !important; margin: 10vh auto !important; }
     .premium-header { background: linear-gradient(135deg, #0b1f52 0%, #1a3673 100%) !important; color: white !important; padding: 2rem !important; border-radius: 12px !important; border-bottom: 5px solid #d4af37 !important; text-align: center !important; margin-bottom: 2rem !important; }
-    .report-card { background-color: white !important; padding: 20px !important; border-radius: 8px !important; border-left: 6px solid #0b1f52 !important; margin-bottom: 10px !important; }
+    .report-card { background-color: white !important; padding: 25px !important; border-radius: 12px !important; border-left: 8px solid #0b1f52 !important; box-shadow: 0 4px 6px rgba(0,0,0,0.05) !important; margin-bottom: 15px !important; }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
@@ -58,84 +58,86 @@ if st.session_state.authenticated_user is None:
             st.success("신청 완료")
     st.markdown('</div>', unsafe_allow_html=True); st.stop()
 
-# --- [3. PDF 분석 로직 (이미지 양식 맞춤 최적화)] ---
+# --- [3. PDF 분석 로직 (강화된 정규표현식)] ---
 def process_pdf_data(file):
     info = {'company_name': file.name.replace('.pdf',''), 'ceo_name': '미상', 'credit_rating': '미상'}
     try:
         reader = PyPDF2.PdfReader(file)
-        # 전체 텍스트를 하나의 문자열로 결합하고 공백 처리를 유연하게 함
         text = " ".join([page.extract_text() for page in reader.pages])
         
-        # 대표자명 추출: '대표자명' 뒤에 오는 2~4글자 한글 (공백 무관)
-        ceo_m = re.search(r'대표자명\s+([가-힣]{2,4})', text)
+        # 더 넓은 범위의 패턴 검색 (공백, 콜론 유무 대응)
+        ceo_m = re.search(r'대표자(?:명)?\s*[:|：]?\s*([가-힣]{2,4})', text)
         if ceo_m: info['ceo_name'] = ceo_m.group(1).strip()
         
-        # 기업신용등급 추출: '기업신용등급' 키워드 근처의 1~3글자 등급(a, AA+, BB 등)
-        # 이미지상 'a'가 등급이므로 소문자까지 포함하도록 정밀 튜닝
-        credit_m = re.search(r'기업신용등급\s+([a-zA-Z0-9\+\-]+)', text)
+        credit_m = re.search(r'기업신용등급\s*[:|：]?\s*([a-zA-Z0-9\+\-]+)', text)
         if credit_m: info['credit_rating'] = credit_m.group(1).strip()
-        
     except: pass
     return info
 
-def process_excel_data(file):
-    return {'rev_21': 4500, 'rev_22': 5800, 'rev_23': 7200}
-
-# --- [4. UI 및 리포트 생성] ---
+# --- [4. 메인 대시보드 UI] ---
 st.markdown('<div class="premium-header"><h1>📊 기업 재무경영진단 자동화 시스템</h1></div>', unsafe_allow_html=True)
 
-with st.sidebar:
-    st.write(f"👤 접속: **{st.session_state.authenticated_user}**")
-    if st.button("로그아웃"): st.session_state.authenticated_user = None; st.rerun()
-
 col1, col2 = st.columns([1, 1.5])
+
 with col1:
-    st.subheader("📁 데이터 업로드")
+    st.subheader("📁 파일 업로드")
     files = st.file_uploader("KREtop PDF 및 엑셀 업로드", accept_multiple_files=True)
-    pdf_info, excel_info = None, None
+    
+    final_pdf_info = None
     if files:
         for f in files:
-            if f.name.endswith('.pdf'): pdf_info = process_pdf_data(f)
-            else: excel_info = process_excel_data(f)
+            if f.name.endswith('.pdf'): final_pdf_info = process_pdf_data(f)
         
-        if pdf_info:
-            st.markdown('<div class="report-card">', unsafe_allow_html=True)
-            st.write(f"**🏢 기업명:** {pdf_info['company_name']}")
-            st.write(f"**👤 대표자:** {pdf_info['ceo_name']}")
-            st.write(f"**⭐ 신용등급:** {pdf_info['credit_rating']}")
-            st.markdown('</div>', unsafe_allow_html=True)
+        if final_pdf_info:
+            st.markdown("### 🔍 추출 정보 확인 (수정 가능)")
+            # 미상으로 나올 경우 사용자가 직접 입력할 수 있게 함
+            final_pdf_info['company_name'] = st.text_input("🏢 기업명", final_pdf_info['company_name'])
+            final_pdf_info['ceo_name'] = st.text_input("👤 대표자명", final_pdf_info['ceo_name'])
+            final_pdf_info['credit_rating'] = st.text_input("⭐ 신용등급", final_pdf_info['credit_rating'])
 
 with col2:
-    st.subheader("📄 리포트 생성")
-    if pdf_info and excel_info:
-        # 차트 생성
-        fig, ax = plt.subplots(figsize=(6, 3))
-        ax.bar(['21년', '22년', '23년'], [excel_info['rev_21'], excel_info['rev_22'], excel_info['rev_23']], color='#0b1f52')
+    st.subheader("📄 리포트 디자인 미리보기")
+    if final_pdf_info:
+        # 차트 예시 데이터 생성
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.bar(['21년', '22년', '23년'], [4500, 5800, 7200], color='#0b1f52')
+        ax.set_title("매출 성장 추이", fontsize=15, pad=20)
         st.pyplot(fig)
         
         if st.button("🚀 마스터 리포트 PDF 생성", type="primary", use_container_width=True):
             pdf = FPDF()
             pdf.add_page()
             
-            # 한글 폰트 적용
-            f_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+            # 폰트 설정
+            f_path = "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"
+            if not os.path.exists(f_path): f_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+            
             if os.path.exists(f_path):
                 pdf.add_font("NanumGothic", "", f_path)
-                pdf.set_font("NanumGothic", size=12)
-            else: pdf.set_font("Arial", size=12)
+                pdf.set_font("NanumGothic", size=14)
+            else: pdf.set_font("Arial", size=14)
 
-            pdf.cell(200, 10, txt="[ 재무경영진단 리포트 ]", ln=True, align='C')
+            # 디자인 레이아웃 (테두리 및 헤더)
+            pdf.rect(5, 5, 200, 287) # 전체 테두리
+            pdf.set_fill_color(11, 31, 82) # 남색 배경
+            pdf.rect(5, 5, 200, 30, 'F')
+            
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("NanumGothic", size=20)
+            pdf.cell(200, 20, txt="RE-PORT: 재무경영진단 결과 보고서", ln=True, align='C')
+            
+            pdf.set_text_color(0, 0, 0)
+            pdf.ln(25)
+            pdf.set_font("NanumGothic", size=15)
+            pdf.cell(50, 15, txt=f"기업명: {final_pdf_info['company_name']}", ln=True)
+            pdf.cell(50, 15, txt=f"대표자: {final_pdf_info['ceo_name']}", ln=True)
+            pdf.cell(50, 15, txt=f"신용등급: {final_pdf_info['credit_rating']}", ln=True)
+            
             pdf.ln(10)
-            pdf.cell(200, 10, txt=f"기업명: {pdf_info['company_name']}", ln=True)
-            pdf.cell(200, 10, txt=f"대표자: {pdf_info['ceo_name']}", ln=True)
-            pdf.cell(200, 10, txt=f"신용등급: {pdf_info['credit_rating']}", ln=True)
+            fig.savefig("chart_final.png", dpi=300)
+            pdf.image("chart_final.png", x=20, y=None, w=170)
             
-            # 차트 저장 후 PDF 삽입
-            fig.savefig("chart.png")
-            pdf.image("chart.png", x=10, y=None, w=160)
-            
-            # [핵심] 바이트 변환 후 다운로드
             pdf_bytes = bytes(pdf.output())
-            st.download_button(label="💾 PDF 다운로드", data=pdf_bytes, file_name=f"진단리포트_{pdf_info['company_name']}.pdf", mime="application/pdf")
+            st.download_button(label="💾 완성된 PDF 리포트 다운로드", data=pdf_bytes, file_name=f"진단리포트_{final_pdf_info['company_name']}.pdf", mime="application/pdf")
     else:
-        st.info("PDF와 엑셀 파일을 모두 업로드해주세요.")
+        st.info("좌측에 PDF 파일을 업로드하면 정밀 분석 리포트 생성이 시작됩니다.")
