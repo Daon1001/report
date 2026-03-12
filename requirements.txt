@@ -1,6 +1,6 @@
-streamlit
-pandas
-matplotlib
-pdfkit
-openpyxl
-PyPDF2
+streamlit==1.31.0
+pandas==2.1.4
+matplotlib==3.8.2
+pdfkit==1.0.0
+openpyxl==3.1.2
+PyPDF2==3.0.1
