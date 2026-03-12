@@ -1,6 +1,6 @@
 streamlit
 pandas
 matplotlib
-pdfplumber
 fpdf2
+google-generativeai
 openpyxl
