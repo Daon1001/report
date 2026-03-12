@@ -94,7 +94,7 @@ DB_FILE = "users.csv"
 def load_db():
     if not os.path.exists(DB_FILE):
         initial_data = pd.DataFrame([
-            {"email": "admin@gmail.com", "approved": True, "is_admin": True, "created_at": "2026-02-14", "usage_count": 0, "last_month": date.today().month},
+            {"email": "incheon00@gmail.com", "approved": True, "is_admin": True, "created_at": "2026-02-14", "usage_count": 0, "last_month": date.today().month},
             {"email": "manager@gmail.com", "approved": True, "is_admin": False, "created_at": "2026-02-14", "usage_count": 0, "last_month": date.today().month}
         ])
         initial_data.to_csv(DB_FILE, index=False)
