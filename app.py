@@ -25,28 +25,26 @@ custom_css = """
         background: linear-gradient(135deg, #0b1f52 0%, #1a3673 100%); 
         color: white; padding: 2.5rem; border-radius: 20px; 
         border-bottom: 8px solid #d4af37; text-align: center; margin-bottom: 2rem;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
     }
     .login-box { 
-        background-color: white !important; padding: 40px !important; border-radius: 20px !important; 
-        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15) !important; text-align: center !important; 
-        max-width: 500px !important; margin: 10vh auto !important; border-top: 10px solid #0b1f52 !important;
+        background-color: white !important; padding: 50px !important; border-radius: 20px !important; 
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1) !important; text-align: center !important; 
+        max-width: 500px !important; margin: 10vh auto !important; border-top: 12px solid #0b1f52 !important;
     }
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
 
 # --- [1. 사용자 데이터베이스 및 승인 로직] ---
-# 허자현 대표님의 컨설팅 비즈니스 관리를 위한 DB 설정
+# Huh Ja-hyun 대표님의 관리자 권한 및 사용자 승인 시스템 구현
 DB_FILE = "users.csv"
 
 def load_db():
     if not os.path.exists(DB_FILE):
         df = pd.DataFrame([{
-            "email": "incheon00@gmail.com", 
-            "approved": True, 
-            "is_admin": True, 
-            "usage_count": 0, 
-            "last_month": date.today().month
+            "email": "incheon00@gmail.com", "approved": True, "is_admin": True, 
+            "usage_count": 0, "last_month": date.today().month
         }])
         df.to_csv(DB_FILE, index=False)
         return df
@@ -63,10 +61,10 @@ if 'authenticated_user' not in st.session_state:
 # --- [2. 로그인 및 승인 신청 화면] ---
 if st.session_state.authenticated_user is None:
     st.markdown('<div class="login-box">', unsafe_allow_html=True)
-    st.markdown('<h2 style="color:#0b1f52;">🏛️ 중소기업경영지원단</h2>', unsafe_allow_html=True)
-    st.markdown("<p>재무경영진단 AI 마스터 v5.5 (Font Error Fixed)</p>", unsafe_allow_html=True)
+    st.markdown('<h1 style="color:#0b1f52; margin-bottom:0;">🏛️ 중소기업경영지원단</h1>', unsafe_allow_html=True)
+    st.markdown("<p style='color:#666; margin-bottom:30px;'>종합 재무진단 및 가치평가 시스템 v6.0</p>", unsafe_allow_html=True)
     
-    login_email = st.text_input("아이디(이메일)", placeholder="example@gmail.com", label_visibility="collapsed").strip().lower()
+    login_email = st.text_input("아이디(이메일)", placeholder="admin@example.com", label_visibility="collapsed").strip().lower()
     
     col_l, col_r = st.columns(2)
     if col_l.button("로그인", type="primary", use_container_width=True):
@@ -94,7 +92,32 @@ if st.session_state.authenticated_user is None:
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
-# --- [3. 데이터 추출 엔진 (PDF & Excel 천원단위 대응)] ---
+# --- [3. 데이터 추출 엔진 (천원단위 및 특수 키워드 대응)] ---
+
+def clean_val(val):
+    if isinstance(val, (int, float)): return float(val)
+    s = re.sub(r'[^\d.-]', '', str(val))
+    return float(s) if s else 0.0
+
+def robust_excel_parser(file):
+    """키워드 공백 무시 및 천원 단위 대응 정밀 파싱"""
+    res = {
+        '매출액': [0.0, 0.0, 0.0], '영업이익': [0.0, 0.0, 0.0], '당기순이익': [0.0, 0.0, 0.0],
+        '자산총계': [0.0, 0.0, 0.0], '부채총계': [0.0, 0.0, 0.0], '원재료비': [0.0, 0.0, 0.0], '판관비': [0.0, 0.0, 0.0]
+    }
+    try:
+        xls = pd.ExcelFile(file)
+        for sheet in xls.sheet_names:
+            df = pd.read_excel(file, sheet_name=sheet).fillna(0)
+            for _, row in df.iterrows():
+                # 행 텍스트에서 공백과 기호를 제거하고 키워드 매칭
+                row_txt = "".join([str(v) for v in row.values]).replace(" ", "").replace("Ⅰ.", "").replace("Ⅱ.", "")
+                for key in res.keys():
+                    if key in row_txt:
+                        nums = [clean_val(v) for v in row.values if clean_val(v) != 0]
+                        if len(nums) >= 3: res[key] = nums[-3:]
+    except: pass
+    return res
 
 def extract_pdf_meta(file):
     info = {'company': file.name.replace('.pdf',''), 'ceo': '미상', 'rating': '미상'}
@@ -108,28 +131,9 @@ def extract_pdf_meta(file):
     except: pass
     return info
 
-def smart_excel_parser(file):
-    """키워드 위치와 무관하게 천원 단위 데이터를 정밀하게 찾아냄"""
-    res = {
-        '매출액': [0.0, 0.0, 0.0], '영업이익': [0.0, 0.0, 0.0], '당기순이익': [0.0, 0.0, 0.0],
-        '자산총계': [0.0, 0.0, 0.0], '부채총계': [0.0, 0.0, 0.0], '원재료비': [0.0, 0.0, 0.0], '판관비': [0.0, 0.0, 0.0]
-    }
-    try:
-        xls = pd.ExcelFile(file)
-        for sheet in xls.sheet_names:
-            df = pd.read_excel(file, sheet_name=sheet).fillna(0)
-            for _, row in df.iterrows():
-                row_txt = "".join([str(v) for v in row.values])
-                for key in res.keys():
-                    if key in row_txt:
-                        nums = [v for v in row.values if isinstance(v, (int, float)) and abs(v) > 0]
-                        if len(nums) >= 3: res[key] = [float(n) for n in nums[-3:]]
-    except: pass
-    return res
-
 # --- [4. 메인 화면 및 관리자 기능] ---
 
-st.markdown('<div class="premium-header"><h1>📊 [PRIME] 종합 경영진단 및 가치평가 시스템</h1></div>', unsafe_allow_html=True)
+st.markdown('<div class="premium-header"><h1>📊 [PRIME] 종합 경영진단 리포트 시스템</h1></div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.write(f"👤 접속: **{st.session_state.authenticated_user}**")
@@ -137,17 +141,17 @@ with st.sidebar:
         st.session_state.authenticated_user = None
         st.rerun()
     
-    # 관리자 메뉴 (허자현 대표님 전용 승인 관리 기능)
+    # 관리자 전용 승인 메뉴 (Huh Ja-hyun 대표님 관리용)
     u_info = user_db[user_db['email'] == st.session_state.authenticated_user].iloc[0]
     if u_info['is_admin']:
         st.divider(); st.subheader("👑 관리자 메뉴")
         st.dataframe(user_db[['email', 'approved']], use_container_width=True)
-        target = st.selectbox("승인 상태 변경", user_db['email'])
-        if st.button("승인 전환"):
+        target = st.selectbox("승인 상태 변경 대상", user_db['email'])
+        if st.button("승인 상태 전환"):
             user_db.loc[user_db['email'] == target, 'approved'] = not user_db.loc[user_db['email'] == target, 'approved'].iloc[0]
             save_db(user_db); st.rerun()
 
-# --- [5. 메인 분석 영역] ---
+# --- [5. 데이터 분석 및 종합 보고서 섹션] ---
 
 col1, col2 = st.columns([1, 1.4])
 
@@ -159,13 +163,14 @@ with col1:
     if up_files:
         for f in up_files:
             if f.name.endswith('.pdf'): p_meta = extract_pdf_meta(f)
-            if f.name.endswith(('.xlsx', '.xls')): e_res = smart_excel_parser(f)
+            if f.name.endswith(('.xlsx', '.xls')): e_res = robust_excel_parser(f)
         
         if e_res:
-            st.success("✅ 엑셀 데이터 연동 완료 (천원 단위)")
-            with st.expander("📝 추출 데이터 보정 및 입력", expanded=True):
+            st.success("✅ 엑셀 데이터 정밀 연동 완료 (천원 단위)")
+            with st.expander("📝 데이터 보정 및 최종 확인", expanded=True):
                 c_name = st.text_input("🏢 기업명", p_meta['company'] if p_meta else "신용")
-                c_ceo = st.text_input("👤 대표자", p_meta['ceo'] if p_meta else "미상")
+                c_ceo = st.text_input("👤 대표자", p_meta['ceo'] if p_meta else "허자현")
+                
                 # 천원 단위 데이터를 입력받음
                 revs = [st.number_input(f"{i+1}차 매출(천원)", value=e_res['매출액'][i]) for i in range(3)]
                 incs = [st.number_input(f"{i+1}차 순이익(천원)", value=e_res['당기순이익'][i]) for i in range(3)]
@@ -176,7 +181,7 @@ with col1:
                 total_shares = st.number_input("발행주식 총수", value=100000)
 
 with col2:
-    st.subheader("📈 경영 지표 분석 및 미래 예측")
+    st.subheader("📈 종합 진단 시뮬레이션")
     if e_res:
         # 가치 평가 로직 (천원 -> 원 환산)
         growth = (revs[2]/revs[0])**(1/2) - 1 if revs[0]>0 else 0
@@ -188,70 +193,54 @@ with col2:
 
         # 시각화 차트
         fig, ax = plt.subplots(figsize=(8, 4.5))
-        ax.plot(['현재', '3년후', '5년후', '10년후'], f_vals, marker='o', color='#d4af37', linewidth=3)
-        for i, v in enumerate(f_vals): ax.text(i, v*1.1, f"{int(v):,}원", ha='center', fontweight='bold')
-        ax.set_title(f"{c_name} 주식 가치 10개년 시뮬레이션", fontsize=14, pad=20)
+        ax.plot(['현재', '3년후', '5년후', '10년후'], f_vals, marker='o', color='#d4af37', linewidth=4)
+        for i, v in enumerate(f_vals): 
+            ax.text(i, v*1.1, f"{int(v):,}원", ha='center', fontweight='bold', fontsize=11)
+        ax.set_title(f"{c_name} 주식 가치 10개년 시뮬레이션", fontsize=15, pad=20)
+        ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
         st.pyplot(fig)
         
-        if st.button("🚀 미다스형 종합 보고서 발행", type="primary", use_container_width=True):
-            with st.spinner("미다스엔지니어링 스타일 보고서 생성 중..."):
-                pdf = FPDF()
-                f_p = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
-                if os.path.exists(f_p):
-                    # 폰트 등록 (일반 스타일만 등록)
-                    pdf.add_font("Nanum", "", f_p)
-                    pdf.set_font("Nanum", size=12)
-                
-                # --- Page 1: 표지 (Cover) ---
-                pdf.add_page(); pdf.set_fill_color(11, 31, 82); pdf.rect(0, 0, 210, 297, 'F')
-                pdf.set_text_color(255, 255, 255); pdf.ln(90); pdf.set_font("Nanum", size=32)
-                pdf.cell(190, 25, txt="RE-PORT: 종합 경영진단 보고서", ln=True, align='C')
-                pdf.set_font("Nanum", size=20); pdf.cell(190, 20, txt=f"기업명: {c_name}", ln=True, align='C')
-                pdf.ln(100); pdf.set_font("Nanum", size=14)
-                pdf.cell(190, 10, txt=f"발행일: {date.today().strftime('%Y-%m-%d')}", ln=True, align='C')
-                pdf.cell(190, 10, txt="중소기업경영지원단 AI 컨설팅 본부", ln=True, align='C')
-                
-                # --- Page 2: 재무 현황 분석 ---
-                pdf.add_page(); pdf.set_text_color(0,0,0); pdf.set_font("Nanum", size=20)
-                pdf.cell(190, 15, txt="1. 주요 재무 지표 분석 (단위: 천원)", ln=True)
-                pdf.set_draw_color(11, 31, 82); pdf.set_line_width(1); pdf.line(10, 28, 200, 28); pdf.ln(15)
-                
-                # 분모 0 방지 로직 적용
-                d_ratio = (debts[2]/assets[2]*100) if assets[2] > 0 else 0
-                m_ratio = (mats[2]/revs[2]*100) if revs[2] > 0 else 0
-                e_ratio = (exps[2]/revs[2]*100) if revs[2] > 0 else 0
-                
-                pdf.set_font("Nanum", size=12)
-                pdf.cell(190, 10, txt=f"■ 매출액 추이: {revs[0]:,.0f} → {revs[1]:,.0f} → {revs[2]:,.0f}", ln=True)
-                pdf.cell(190, 10, txt=f"■ 원재료비율: {m_ratio:.1f}% | 경비(판관비)율: {e_ratio:.1f}%", ln=True)
-                pdf.cell(190, 10, txt=f"■ 부채비율: {d_ratio:.1f}% (최근 기말 기준)", ln=True)
-                
-                # --- Page 3: 비상장주식 가치평가 및 미래 예측 ---
-                pdf.add_page(); pdf.set_font("Nanum", size=20)
-                pdf.cell(190, 15, txt="2. 비상장주식 평가 및 10개년 예측", ln=True)
-                pdf.line(10, 28, 200, 28); pdf.ln(10)
-                pdf.set_font("Nanum", size=15); pdf.set_text_color(11, 31, 82)
-                pdf.cell(190, 15, txt=f"▶ 현시점 주당 평가액: {int(stock_price):,}원", ln=True)
-                
-                fig.savefig("midas_report_chart.png", dpi=300, bbox_inches='tight')
-                pdf.image("midas_report_chart.png", x=15, w=180)
-                
-                # --- Page 4: 전략적 컨설팅 제안 ---
-                pdf.add_page(); pdf.set_text_color(0,0,0); pdf.set_font("Nanum", size=20)
-                pdf.cell(190, 15, txt="3. 전문가 경영 리스크 진단", ln=True)
-                pdf.line(10, 28, 200, 28); pdf.ln(15)
-                
-                suggestions = [
-                    ("가지급금 및 이익잉여금 관리", "현재 수익 성장세 대비 이익잉여금 누적이 가파릅니다. 차등 배당이나 이익 소각을 통한 정리가 필요합니다."),
-                    ("가업 승계 및 증여 플랜 수립", f"성장률 {growth*100:.1f}% 지속 시 주식 가치가 급등하므로, 절세 골든타임 내 지분 증여가 권장됩니다."),
-                    ("제조 원가 구조 최적화 전략", "원재료 비중 추이를 고려할 때 구매처 다변화 및 고정비 관리 효율화가 요구되는 시점입니다.")
-                ]
-                for title, detail in suggestions:
-                    # 폰트 에러 방지를 위해 style='B'를 제거하고 폰트 크기로 강조
-                    pdf.set_font("Nanum", size=14); pdf.cell(190, 10, txt=f"■ {title}", ln=True)
-                    pdf.set_font("Nanum", size=12); pdf.multi_cell(185, 8, txt=detail); pdf.ln(10)
+        if st.button("🚀 미다스형 종합 보고서 발행 (PDF)", type="primary", use_container_width=True):
+            pdf = FPDF()
+            f_p = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+            if os.path.exists(f_p): pdf.add_font("Nanum", "", f_p); pdf.set_font("Nanum", size=12)
+            
+            # --- Page 1: 표지 ---
+            pdf.add_page(); pdf.set_fill_color(11, 31, 82); pdf.rect(0, 0, 210, 297, 'F')
+            pdf.set_text_color(255, 255, 255); pdf.ln(90); pdf.set_font("Nanum", size=32)
+            pdf.cell(190, 25, txt="RE-PORT: 종합 경영진단 보고서", ln=True, align='C')
+            pdf.set_font("Nanum", size=20); pdf.cell(190, 20, txt=f"기업명: {c_name}", ln=True, align='C')
+            pdf.ln(100); pdf.set_font("Nanum", size=14)
+            pdf.cell(190, 10, txt=f"발행일: {date.today().strftime('%Y-%m-%d')}", ln=True, align='C')
+            pdf.cell(190, 10, txt="중소기업경영지원단 AI 컨설팅 본부", ln=True, align='C')
+            
+            # --- Page 2: 재무 현황 ---
+            pdf.add_page(); pdf.set_text_color(0,0,0); pdf.set_font("Nanum", size=20)
+            pdf.cell(190, 15, txt="1. 3개년 주요 재무 지표 (단위: 천원)", ln=True)
+            pdf.set_draw_color(11, 31, 82); pdf.set_line_width(1); pdf.line(10, 28, 200, 28); pdf.ln(15)
+            
+            d_ratio = (debts[2]/assets[2]*100) if assets[2] > 0 else 0
+            m_ratio = (mats[2]/revs[2]*100) if revs[2] > 0 else 0
+            
+            pdf.set_font("Nanum", size=12)
+            pdf.cell(190, 10, txt=f"■ 매출액 추이: {revs[0]:,.0f} → {revs[1]:,.0f} → {revs[2]:,.0f}", ln=True)
+            pdf.cell(190, 10, txt=f"■ 원재료비율: {m_ratio:.1f}% | 부채비율: {d_ratio:.1f}%", ln=True)
+            
+            # --- Page 3: 가치 평가 및 시뮬레이션 ---
+            pdf.add_page(); pdf.set_font("Nanum", size=20)
+            pdf.cell(190, 15, txt="2. 비상장주식 평가 및 미래 예측", ln=True)
+            pdf.line(10, 28, 200, 28); pdf.ln(10); pdf.set_font("Nanum", size=15); pdf.set_text_color(11, 31, 82)
+            pdf.cell(190, 15, txt=f"▶ 현시점 주당 가치: {int(stock_price):,}원", ln=True)
+            fig.savefig("final_midas_chart.png", dpi=300, bbox_inches='tight')
+            pdf.image("final_midas_chart.png", x=15, w=180)
 
-                pdf_bytes = bytes(pdf.output())
-                st.download_button("💾 종합 진단 보고서 다운로드", data=pdf_bytes, file_name=f"경영진단보고서_{c_name}.pdf", mime="application/pdf")
+            # --- Page 4: 전략적 컨설팅 제안 ---
+            pdf.add_page(); pdf.set_text_color(0,0,0); pdf.set_font("Nanum", size=20)
+            pdf.cell(190, 15, txt="3. 전문가 경영 리스크 제안", ln=True); pdf.line(10, 28, 200, 28); pdf.ln(15)
+            pdf.set_font("Nanum", size=12)
+            pdf.multi_cell(180, 10, txt="[분석 결과] 현재 주식 가치가 연평균 성장률을 따라 급격히 상승하고 있습니다. 증여세 부담을 줄이기 위한 사전 지분 구조 정비가 시급하며, 원재료비 비중 상승에 따른 이익률 방어 전략이 요구됩니다.")
+
+            pdf_bytes = bytes(pdf.output())
+            st.download_button("💾 종합 정밀 보고서 다운로드", data=pdf_bytes, file_name=f"진단보고서_{c_name}.pdf")
     else:
         st.info("좌측 섹션에서 재무제표 엑셀 파일을 업로드해주세요.")
