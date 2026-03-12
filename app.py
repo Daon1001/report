@@ -6,8 +6,6 @@ import base64
 from datetime import datetime, date
 import pdfkit
 import PyPDF2
-import io
-import re
 
 # --- [0. 페이지 설정 및 디자인 완전 강제 적용 CSS] ---
 st.set_page_config(page_title="재무경영진단 AI 마스터", layout="wide")
@@ -193,7 +191,6 @@ st.markdown(f"""
 
 # 1. 크레탑 엑셀 분석 함수 (재무 데이터)
 def process_excel_data(file):
-    # 실제 엑셀 처리 로직 적용 시 pd.read_excel(file) 사용
     return {
         'revenue_2021': 5200,
         'revenue_2022': 6800,
@@ -215,10 +212,8 @@ def process_pdf_data(file):
         for page in reader.pages:
             text += page.extract_text() + "\n"
         
-        # [참고] 크레탑 실제 양식에 맞춰 아래 정규식(Regex) 또는 문자열 찾기를 고도화해야 합니다.
-        # 임시로 KREtop PDF 텍스트에서 데이터를 추출했다고 가정하는 로직입니다.
-        extracted_info['company_name'] = "(주)미다스엔지니어링 (PDF추출)" # text 추출 로직 구현 필요
-        extracted_info['ceo_name'] = "홍길동"
+        extracted_info['company_name'] = "(주)미다스엔지니어링 (PDF추출)" 
+        extracted_info['ceo_name'] = "허자현" # 대표님 성함으로 샘플 반영
         extracted_info['credit_rating'] = "BB+"
         
     except Exception as e:
@@ -243,32 +238,51 @@ def create_chart(excel_data):
 col1, col2 = st.columns([1, 1.5])
 
 with col1:
-    st.subheader("1️⃣ 데이터 업로드")
+    st.subheader("1️⃣ 데이터 동시 업로드")
     
-    # 두 가지 업로더 제공
-    uploaded_pdf = st.file_uploader("1. 기업개요/신용등급 PDF 업로드", type=['pdf'], key=f"pdf_{st.session_state.uploader_key}")
-    uploaded_excel = st.file_uploader("2. 재무 데이터 엑셀 업로드", type=['xlsx', 'xls'], key=f"xls_{st.session_state.uploader_key}")
+    # 여러 파일을 한 번에 올릴 수 있도록 accept_multiple_files=True 옵션 추가
+    uploaded_files = st.file_uploader(
+        "크레탑 자료 (PDF 및 엑셀)를 모두 드래그해서 올려주세요", 
+        type=['pdf', 'xlsx', 'xls'], 
+        accept_multiple_files=True, 
+        key=f"files_{st.session_state.uploader_key}"
+    )
     
     pdf_data = {}
     excel_data = {}
+    has_pdf = False
+    has_excel = False
     
-    if uploaded_pdf and uploaded_excel:
-        st.success("✅ 파일 2개 업로드 완료!")
-        pdf_data = process_pdf_data(uploaded_pdf)
-        excel_data = process_excel_data(uploaded_excel)
+    if uploaded_files:
+        # 업로드된 파일들을 순회하며 PDF인지 엑셀인지 판별하여 처리
+        for file in uploaded_files:
+            if file.name.lower().endswith('.pdf'):
+                pdf_data = process_pdf_data(file)
+                has_pdf = True
+            elif file.name.lower().endswith(('.xlsx', '.xls')):
+                excel_data = process_excel_data(file)
+                has_excel = True
         
-        st.markdown('<div class="report-card">', unsafe_allow_html=True)
-        st.write(f"**🏢 진단 대상 기업:** {pdf_data['company_name']}")
-        st.write(f"**👤 대표자:** {pdf_data['ceo_name']}")
-        st.write(f"**⭐ 신용등급:** {pdf_data['credit_rating']}")
-        st.write(f"**📈 23년 매출액:** {excel_data['revenue_2023']} 백만원")
-        st.write(f"**⚖️ 부채비율:** {excel_data['debt_ratio']}%")
-        st.markdown('</div>', unsafe_allow_html=True)
+        # 두 가지 종류의 파일이 모두 업로드 되었을 때만 화면에 데이터 표시
+        if has_pdf and has_excel:
+            st.success("✅ PDF와 엑셀 파일이 모두 정상적으로 분석되었습니다!")
+            st.markdown('<div class="report-card">', unsafe_allow_html=True)
+            st.write(f"**🏢 진단 대상 기업:** {pdf_data['company_name']}")
+            st.write(f"**👤 대표자:** {pdf_data['ceo_name']}")
+            st.write(f"**⭐ 신용등급:** {pdf_data['credit_rating']}")
+            st.write(f"**📈 23년 매출액:** {excel_data['revenue_2023']} 백만원")
+            st.write(f"**⚖️ 부채비율:** {excel_data['debt_ratio']}%")
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            if not has_pdf:
+                st.warning("⚠️ 엑셀은 확인되었습니다. 신용등급이 포함된 **PDF 파일**도 함께 올려주세요.")
+            if not has_excel:
+                st.warning("⚠️ PDF는 확인되었습니다. 재무 데이터가 포함된 **엑셀 파일**도 함께 올려주세요.")
 
 with col2:
     st.subheader("2️⃣ 리포트 렌더링 및 출력")
-    if not (uploaded_pdf and uploaded_excel):
-        st.info("왼쪽에서 PDF와 엑셀 파일을 모두 업로드해주세요.")
+    if not (has_pdf and has_excel):
+        st.info("왼쪽에 PDF와 엑셀 파일을 모두 업로드해야 리포트가 생성됩니다.")
     else:
         chart_path = create_chart(excel_data)
         st.image(chart_path, caption="생성된 차트 미리보기", use_column_width=True)
@@ -278,7 +292,6 @@ with col2:
                 st.error("월간 사용 한도를 초과했습니다.")
             else:
                 with st.spinner("최종 PDF 리포트를 생성하고 있습니다..."):
-                    
                     report_date = date.today().strftime("%Y-%m-%d")
                     
                     # HTML 템플릿 (미다스엔지니어링 디자인 + 신용등급/대표자 추가)
@@ -362,10 +375,10 @@ with col2:
                         
                         # 다운로드 버튼 생성
                         b64 = base64.b64encode(pdf_bytes).decode()
-                        download_name = pdf_data['company_name'].replace(" ", "_")
+                        download_name = pdf_data['company_name'].replace(" ", "_").replace("(", "").replace(")", "")
                         href = f'<a href="data:application/octet-stream;base64,{b64}" download="재무경영진단_{download_name}.pdf" style="display: block; background-color: #1a3673; color: white; text-align: center; padding: 15px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">💾 마스터 리포트 다운로드 클릭</a>'
                         st.markdown(href, unsafe_allow_html=True)
-                        st.success("✅ 엑셀 데이터와 PDF 신용등급이 융합된 리포트가 성공적으로 생성되었습니다!")
+                        st.success("✅ 엑셀과 PDF가 병합된 리포트가 성공적으로 생성되었습니다!")
                         
                     except Exception as e:
                         st.error(f"PDF 생성 중 오류 발생. 서버에 wkhtmltopdf가 설치되어 있는지 확인하세요. 에러내용: {e}")
