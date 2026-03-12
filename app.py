@@ -11,7 +11,7 @@ import re
 # --- [0. 페이지 설정 및 디자인] ---
 st.set_page_config(page_title="재무경영진단 AI 마스터", layout="wide")
 
-# 한글 폰트 설정 (Matplotlib용)
+# 리눅스(배포 환경) 한글 폰트 설정
 plt.rc('font', family='NanumGothic') 
 plt.rcParams['axes.unicode_minus'] = False
 
@@ -106,7 +106,7 @@ def process_pdf_data(file):
     try:
         reader = PyPDF2.PdfReader(file)
         text = "".join([page.extract_text() for page in reader.pages])
-        # 대표자명 및 기업신용등급 추출
+        # 키워드 기반 정밀 추출
         ceo_m = re.search(r'대표자명\s*[:|：]?\s*([가-힣]+)', text)
         if ceo_m: info['ceo_name'] = ceo_m.group(1).strip()
         credit_m = re.search(r'기업신용등급\s*[:|：]?\s*([A-Z0-9+-]+)', text)
@@ -115,13 +115,13 @@ def process_pdf_data(file):
     return info
 
 def process_excel_data(file):
-    # 샘플 데이터 (추후 실제 엑셀 로직 연결 가능)
+    # 샘플 데이터 (추후 실제 엑셀 파싱 로직으로 교체 가능)
     return {'rev_21': 4500, 'rev_22': 5800, 'rev_23': 7200, 'debt': 125.4}
 
 def create_chart(data):
     fig, ax = plt.subplots(figsize=(6, 3))
     ax.bar(['2021', '2022', '2023'], [data['rev_21'], data['rev_22'], data['rev_23']], color='#0b1f52')
-    ax.set_title("매출 성장 추이 (백만원)")
+    ax.set_title("매출 성장 추이 (단위: 백만원)")
     chart_path = "temp_chart.png"
     fig.savefig(chart_path, bbox_inches='tight')
     plt.close(fig)
@@ -172,33 +172,39 @@ with col2:
         cp = create_chart(excel_info)
         st.image(cp, use_column_width=True)
         
-        if st.button("🚀 PDF 리포트 생성 및 다운로드", type="primary", use_container_width=True):
-            # fpdf를 사용한 PDF 생성 (외부 엔진 필요 없음)
-            pdf = FPDF()
-            pdf.add_page()
-            # 폰트 추가 (서버에 설치된 나눔고딕 경로)
-            font_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
-            if os.path.exists(font_path):
-                pdf.add_font("NanumGothic", "", font_path)
-                pdf.set_font("NanumGothic", size=12)
-            else:
-                pdf.set_font("Arial", size=12)
+        if st.button("🚀 마스터 리포트 PDF 생성", type="primary", use_container_width=True):
+            with st.spinner("PDF 리포트를 생성 중입니다..."):
+                pdf = FPDF()
+                pdf.add_page()
+                
+                # 스트림릿 클라우드 한글 폰트 경로 설정
+                font_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+                if os.path.exists(font_path):
+                    pdf.add_font("NanumGothic", "", font_path)
+                    pdf.set_font("NanumGothic", size=12)
+                else:
+                    pdf.set_font("Arial", size=12)
 
-            pdf.cell(200, 10, txt="재무경영진단 리포트", ln=True, align='C')
-            pdf.ln(10)
-            pdf.cell(200, 10, txt=f"기업명: {pdf_info['company_name']}", ln=True)
-            pdf.cell(200, 10, txt=f"대표자: {pdf_info['ceo_name']}", ln=True)
-            pdf.cell(200, 10, txt=f"신용등급: {pdf_info['credit_rating']}", ln=True)
-            pdf.ln(10)
-            pdf.image(cp, x=10, y=None, w=150)
-            
-            pdf_output = pdf.output()
-            st.download_button(
-                label="💾 생성된 PDF 다운로드",
-                data=pdf_output,
-                file_name=f"진단리포트_{pdf_info['company_name']}.pdf",
-                mime="application/pdf"
-            )
-            st.success("리포트가 성공적으로 생성되었습니다!")
+                # PDF 내용 채우기
+                pdf.cell(200, 10, txt="[ 재무경영진단 보고서 ]", ln=True, align='C')
+                pdf.ln(10)
+                pdf.cell(200, 10, txt=f"기업명: {pdf_info['company_name']}", ln=True)
+                pdf.cell(200, 10, txt=f"대표자: {pdf_info['ceo_name']}", ln=True)
+                pdf.cell(200, 10, txt=f"신용등급: {pdf_info['credit_rating']}", ln=True)
+                pdf.ln(10)
+                
+                # 차트 삽입
+                pdf.image(cp, x=10, y=None, w=160)
+                
+                # [에러 해결 지점] output()을 bytes로 변환
+                pdf_bytes = bytes(pdf.output())
+                
+                st.download_button(
+                    label="💾 생성된 PDF 다운로드",
+                    data=pdf_bytes,
+                    file_name=f"진단리포트_{pdf_info['company_name']}.pdf",
+                    mime="application/pdf"
+                )
+                st.success("리포트가 준비되었습니다. 위 버튼을 눌러 다운로드하세요!")
     else:
-        st.info("왼쪽에서 파일을 업로드하면 이곳에 미리보기가 나타납니다.")
+        st.info("파일 업로드 시 이곳에 분석 결과가 나타납니다.")
