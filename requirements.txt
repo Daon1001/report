@@ -1,6 +1,7 @@
 streamlit
 pandas
 matplotlib
-PyPDF2
-fpdf2
+pdfplumber
+fpdf
 openpyxl
+PyPDF2
