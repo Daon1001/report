@@ -205,6 +205,7 @@ def get_pdfkit_config():
 
 # 1. 크레탑 엑셀 분석 함수 (재무 데이터)
 def process_excel_data(file):
+    # 실제 엑셀 데이터 매핑을 위한 테스트 데이터
     return {
         'revenue_2021': 5200,
         'revenue_2022': 6800,
@@ -213,7 +214,7 @@ def process_excel_data(file):
         'analysis_text': "전년 대비 매출이 견고하게 성장하고 있으며, 부채비율은 안정적인 수준을 유지하고 있습니다."
     }
 
-# 2. 크레탑 PDF 분석 함수 (기업개요, 신용등급 실제 추출 로직 적용)
+# 2. 크레탑 PDF 분석 함수 (알려주신 키워드 기반 정밀 추출)
 def process_pdf_data(file):
     extracted_info = {
         'company_name': '미상',
@@ -228,26 +229,22 @@ def process_pdf_data(file):
         for page in reader.pages:
             full_text += page.extract_text() + "\n"
         
-        # [정규표현식을 이용한 데이터 추출]
-        # 크레탑 문서 양식에서 흔히 쓰이는 키워드 주변의 데이터를 긁어옵니다.
-        
-        # ① 기업명/업체명 추출 (예: '업체명 : (주)한국기업' 또는 '기업명 (주)한국기업')
+        # ① 기업명/업체명 추출
         company_match = re.search(r'(업체명|기업명|상호명?)\s*[:|：]?\s*([^\n\s]+)', full_text)
         if company_match:
             extracted_info['company_name'] = company_match.group(2).strip()
         else:
-            # 문서에서 못 찾으면 업로드한 파일 이름에서 '.pdf'를 떼고 사용
             extracted_info['company_name'] = file.name.replace(".pdf", "").replace("크레탑", "").strip()
 
-        # ② 대표자 추출 (예: '대표자 : 홍길동' 또는 '대표이사 홍길동')
-        ceo_match = re.search(r'(대표자|대표이사|대표자명)\s*[:|：]?\s*([가-힣]{2,4})', full_text)
+        # ② 대표자명 추출 (정확히 '대표자명' 타겟팅)
+        ceo_match = re.search(r'대표자명\s*[:|：]?\s*([가-힣a-zA-Z]+)', full_text)
         if ceo_match:
-            extracted_info['ceo_name'] = ceo_match.group(2).strip()
+            extracted_info['ceo_name'] = ceo_match.group(1).strip()
             
-        # ③ 신용등급 추출 (예: '신용등급 : BB+' 또는 '등급 BB+')
-        credit_match = re.search(r'(신용등급|등급)\s*[:|：]?\s*([A-Z0-9\+\-]+)', full_text)
+        # ③ 기업신용등급 추출 (정확히 '기업신용등급' 타겟팅)
+        credit_match = re.search(r'기업신용등급\s*[:|：]?\s*([A-Z0-9\+\-]+)', full_text)
         if credit_match:
-            extracted_info['credit_rating'] = credit_match.group(2).strip()
+            extracted_info['credit_rating'] = credit_match.group(1).strip()
 
     except Exception as e:
         st.error(f"PDF 텍스트 추출 중 오류가 발생했습니다: {e}")
@@ -305,8 +302,8 @@ with col1:
             st.markdown('</div>', unsafe_allow_html=True)
             
             # 추출 실패 시 안내 메시지
-            if pdf_data['credit_rating'] == '미상':
-                st.warning("⚠️ PDF에서 신용등급이나 대표자명을 자동으로 찾지 못했습니다. 크레탑 PDF 양식 내 단어(예: '업체명', '대표자', '등급') 형식이 다를 수 있습니다.")
+            if pdf_data['credit_rating'] == '미상' or pdf_data['ceo_name'] == '미상':
+                st.warning("⚠️ 파일 업로드는 성공했으나 PDF 내에서 해당 텍스트를 정확히 추출하지 못했습니다. PDF 양식을 다시 확인해 주세요.")
         else:
             if not has_pdf:
                 st.warning("⚠️ 엑셀은 확인되었습니다. 신용등급이 포함된 **PDF 파일**도 함께 올려주세요.")
@@ -365,10 +362,10 @@ with col2:
                                 <table>
                                     <tr>
                                         <th>기업명</th><td>{pdf_data['company_name']}</td>
-                                        <th>대표자</th><td>{pdf_data['ceo_name']}</td>
+                                        <th>대표자명</th><td>{pdf_data['ceo_name']}</td>
                                     </tr>
                                     <tr>
-                                        <th>신용등급</th><td colspan="3" style="font-weight: bold; color: #1a2a5a;">{pdf_data['credit_rating']}</td>
+                                        <th>기업신용등급</th><td colspan="3" style="font-weight: bold; color: #1a2a5a;">{pdf_data['credit_rating']}</td>
                                     </tr>
                                 </table>
 
