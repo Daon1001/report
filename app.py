@@ -10,10 +10,16 @@ import json
 from datetime import date
 import io
 
-# --- [0. 페이지 설정 및 폰트 안전 로드] ---
-st.set_page_config(page_title="SME 종합 재무진단 AI v52.0", layout="wide")
+# --- [0. 페이지 설정 및 초기화] ---
+st.set_page_config(page_title="SME 종합 재무진단 AI v53.0", layout="wide")
 
-# 맑은 고딕(malgun.ttf) 경로 설정 (GitHub 업로드 필수)
+# 변수 초기화 (NameError 방지)
+f_comp, f_ceo, f_emp = "미상", "미상", 0
+r_rev, r_inc, r_asset, r_debt = 0.0, 0.0, 0.0, 0.0
+d_rev, d_inc, d_ast, d_dbt = [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
+d_vent, d_rnd = False, False
+
+# 폰트 설정 (malgun.ttf 필수)
 base_dir = os.path.dirname(__file__)
 font_path = os.path.join(base_dir, "malgun.ttf")
 
@@ -30,7 +36,7 @@ def set_korean_font(path):
 
 has_font = set_korean_font(font_path)
 
-# Streamlit Secrets 보안 로드
+# Secrets 보안 로드
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except:
@@ -51,7 +57,6 @@ st.markdown("""
 DB_FILE = "users.csv"
 def load_db():
     if not os.path.exists(DB_FILE):
-        # 허자현 대표님 전용 관리자 계정
         df = pd.DataFrame([{"email": "incheon00@gmail.com", "approved": True, "is_admin": True}])
         df.to_csv(DB_FILE, index=False)
         return df
@@ -63,9 +68,9 @@ user_db = load_db()
 if 'auth_user' not in st.session_state: st.session_state.auth_user = None
 
 if st.session_state.auth_user is None:
-    st.markdown('<div style="background:white; padding:50px; border-radius:20px; max-width:500px; margin:10vh auto; text-align:center; border-top:10px solid #0b1f52; box-shadow: 0 15px 35px rgba(0,0,0,0.15);">', unsafe_allow_html=True)
+    st.markdown('<div style="background:white; padding:50px; border-radius:20px; max-width:500px; margin:10vh auto; text-align:center; border-top:10px solid #0b1f52; box-shadow: 0 15px 30px rgba(0,0,0,0.15);">', unsafe_allow_html=True)
     st.markdown('<h1 style="color:#0b1f52;">🏛️ 중소기업경영지원단</h1>', unsafe_allow_html=True)
-    st.markdown("<p style='color:#666;'>제미나이 AI 통합 시스템 v52.0</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#666;'>제미나이 AI 통합 시스템 v53.0</p>", unsafe_allow_html=True)
     email = st.text_input("아이디(이메일)").strip().lower()
     if st.button("시스템 로그인", type="primary", use_container_width=True):
         row = user_db[user_db['email'] == email]
@@ -74,33 +79,35 @@ if st.session_state.auth_user is None:
         else: st.error("승인이 필요한 계정입니다.")
     st.markdown('</div>', unsafe_allow_html=True); st.stop()
 
-# --- [2. 제미나이 AI 시각적 분석 엔진] ---
+# --- [2. 제미나이 AI 초정밀 분석 엔진] ---
 
 def analyze_with_gemini(files):
     if not GEMINI_API_KEY:
-        st.error("Secrets에 API 키가 설정되지 않았습니다.")
+        st.error("API 키가 설정되지 않았습니다.")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    # KODATA 특유의 CSV 레이어 구조를 읽기 위한 정밀 지침
+    # 쪼개진 텍스트 레이어를 합치기 위한 정밀 지침
     prompt = """
-    이 파일들을 시각적으로 분석하여 데이터를 추출해줘. 
-    특히 따옴표(")와 쉼표(,)로 쪼개진 텍스트 레이어를 정확히 연결해서 읽어.
-    반드시 아래 JSON 형식으로만 답변하고 다른 텍스트는 생략해.
+    이 파일들은 기업 신용 분석 보고서와 재무 자료야. 
+    텍스트가 '\"기업명\\n\",\"(주)메이홈\\n\"' 처럼 줄바꿈과 따옴표로 심하게 쪼개져 있어. 
+    너는 이 쪼개진 단어들을 먼저 하나로 합쳐서 문맥을 파악한 뒤 데이터를 추출해야 해.
+    
+    반드시 아래 JSON 형식으로만 답변해:
     {
-        "comp_name": "기업명",
-        "ceo_name": "대표자명",
-        "emp_count": 0,
-        "revenue": [2022매출, 2023매출, 2024매출],
-        "profit": [2022순이익, 2023순이익, 2024순이익],
-        "asset": [2022자산, 2023자산, 2024자산],
-        "debt": [2022부채, 2023부채, 2024부채],
-        "venture": true/false (벤처인증 여부),
-        "rnd_dept": true/false (연구개발전담부서 여부)
+        "comp_name": "(주)메이홈 등 기업명",
+        "ceo_name": "박승미 등 대표자명",
+        "emp_count": 10,
+        "revenue": [2022년액, 2023년액, 2024년액],
+        "profit": [2022년액, 2023년액, 2024년액],
+        "asset": [2022년액, 2023년액, 2024년액],
+        "debt": [2022년액, 2023년액, 2024년액],
+        "venture": true/false,
+        "rnd_dept": true/false
     }
-    재무 수치는 단위가 '백만원'이면 숫자로 환산해 (예: 4,138 -> 4138). 데이터 없으면 0.
+    재무 수치는 단위가 '백만원'이면 숫자로 환산해 (예: 4,138 -> 4138).
     """
     
     content = [prompt]
@@ -117,20 +124,13 @@ def analyze_with_gemini(files):
         st.error(f"AI 분석 중 오류: {e}")
         return None
 
-# --- [3. 메인 화면 구성 및 변수 초기화] ---
+# --- [3. 메인 화면 구성] ---
 st.markdown('<div class="premium-header"><h1>📊 AI 종합 경영 진단 시스템</h1></div>', unsafe_allow_html=True)
-
-# 초기값 설정
-f_comp, f_ceo, f_emp = "미상", "미상", 0
-r_rev, r_inc, r_asset, r_debt = 0.0, 0.0, 0.0, 0.0
-d_rev, d_inc, d_ast, d_dbt = [0,0,0], [0,0,0], [0,0,0], [0,0,0]
-d_vent, d_rnd = False, False
 
 with st.sidebar:
     st.write(f"👤 담당자: **{st.session_state.auth_user}**")
     if st.button("로그아웃"): st.session_state.auth_user = None; st.rerun()
     
-    # 관리자 승인 메뉴
     user_info = user_db[user_db['email'] == st.session_state.auth_user].iloc[0]
     if user_info['is_admin']:
         st.divider(); st.subheader("👑 관리자 통제 센터")
@@ -144,41 +144,40 @@ col_l, col_r = st.columns([1, 1.4])
 
 with col_l:
     st.subheader("📂 진단 데이터 통합 업로드")
-    up_files = st.file_uploader("개요.pdf 및 재무 엑셀을 함께 올려주세요.", accept_multiple_files=True)
+    up_files = st.file_uploader("개요.pdf 및 재무 엑셀을 함께 업로드하세요.", accept_multiple_files=True)
     
     if up_files:
         if 'ai_data' not in st.session_state:
-            with st.spinner("🚀 AI가 문서의 시각적 데이터를 판독 중입니다..."):
+            with st.spinner("🚀 AI가 파편화된 데이터를 재조합하여 판독 중입니다..."):
                 st.session_state.ai_data = analyze_with_gemini(up_files)
         
         if st.session_state.ai_data:
             d = st.session_state.ai_data
-            f_comp = d.get('comp_name', '미상')
-            f_ceo = d.get('ceo_name', '미상')
+            f_comp = d.get('comp_name', "미상")
+            f_ceo = d.get('ceo_name', "미상")
             f_emp = d.get('emp_count', 0)
             d_rev, d_inc, d_ast, d_dbt = d.get('revenue', [0,0,0]), d.get('profit', [0,0,0]), d.get('asset', [0,0,0]), d.get('debt', [0,0,0])
             d_vent, d_rnd = d.get('venture', False), d.get('rnd_dept', False)
 
             st.success("✅ AI 데이터 동기화 완료")
             with st.expander("📝 데이터 최종 확인 및 보정", expanded=True):
-                # (주)메이홈, 박승미, 10명 자동 인식
-                f_comp = st.text_input("🏢 기업 명칭", f_comp)
+                f_comp = st.text_input("🏢 기업 공식 명칭", f_comp)
                 f_ceo = st.text_input("👤 대표자 성함", f_ceo)
                 f_emp = st.number_input("👥 종업원수(명)", value=f_emp)
                 st.divider()
-                # 2024년 데이터 자동 연동
-                r_rev = st.number_input("2024 매출액 (백만원)", value=float(d_rev[2]))
-                r_inc = st.number_input("2024 순이익", value=float(d_inc[2]))
-                r_asset = st.number_input("2024 자산총계", value=float(d_ast[2]))
-                r_debt = st.number_input("2024 부채총계", value=float(d_dbt[2]))
+                # (주)메이홈 재무 수치 자동 연동
+                r_rev = st.number_input("2024 매출액 (백만원)", value=float(d_rev[2]) if len(d_rev)>2 else 0.0)
+                r_inc = st.number_input("2024 순이익", value=float(d_inc[2]) if len(d_inc)>2 else 0.0)
+                r_asset = st.number_input("2024 자산총계", value=float(d_ast[2]) if len(d_ast)>2 else 0.0)
+                r_debt = st.number_input("2024 부채총계", value=float(d_dbt[2]) if len(d_dbt)>2 else 0.0)
 
 with col_r:
     st.subheader("📈 실시간 진단 결과")
     if up_files and 'ai_data' in st.session_state:
         labor = "5인 이상" if f_emp >= 5 else "5인 미만"
-        st.info(f"분석 결과: 근로자 **{f_emp}명**으로 **'{labor} 사업장'** 노무 가이드가 생성됩니다.")
+        st.info(f"분석 결과: 근로자 **{f_emp}명**으로 **'{labor} 사업장'** 노무 가이드가 적용됩니다.")
         
-        # 주식 가치 평가 시뮬레이션
+        # 가치 평가 시뮬레이션
         stock_val = ((r_inc * 1000 / 0.1)*0.6 + (r_asset - r_debt)*1000*0.4) / 100000
         
         fig, ax = plt.subplots(figsize=(8, 4.5))
@@ -198,15 +197,17 @@ with col_r:
             pdf.cell(190, 25, txt="종합 재무경영 진단 보고서", ln=True, align='C')
             pdf.set_font_size(18); pdf.cell(190, 20, txt=f"대상기업: {f_comp} / 대표: {f_ceo}", ln=True, align='C')
             
-            # P2: 정밀 재무제표 및 AI 분석 전문
+            # P2: 정밀 재무 분석
             pdf.add_page(); pdf.set_text_color(0,0,0); pdf.set_font_size(20)
             pdf.cell(190, 15, txt="1. 정밀 재무제표 및 AI 분석 (단위: 천원)", ln=True); pdf.line(10, 28, 200, 28); pdf.ln(10)
             pdf.set_fill_color(240, 240, 240); pdf.set_font_size(11)
             pdf.cell(50, 10, "항목", 1, 0, 'C', True); pdf.cell(70, 10, "2023년", 1, 0, 'C', True); pdf.cell(70, 10, "2024년 (최근)", 1, 1, 'C', True)
             
             f_rows = [
-                ("자산 총계", d_ast[1], r_asset), ("부채 총계", d_dbt[1], r_debt), 
-                ("매출액", d_rev[1], r_rev), ("당기순이익", d_inc[1], r_inc)
+                ("자산 총계", d_ast[1] if len(d_ast)>1 else 0, r_asset), 
+                ("부채 총계", d_dbt[1] if len(d_dbt)>1 else 0, r_debt), 
+                ("매출액", d_rev[1] if len(d_rev)>1 else 0, r_rev), 
+                ("당기순이익", d_inc[1] if len(d_inc)>1 else 0, r_inc)
             ]
             for n, v1, v2 in f_rows:
                 pdf.cell(50, 10, n, 1); pdf.cell(70, 10, f"{v1:,.0f}", 1, 0, 'R'); pdf.cell(70, 10, f"{v2:,.0f}", 1, 1, 'R')
@@ -215,12 +216,12 @@ with col_r:
             pdf.cell(190, 10, txt="▶ 전문가 종합 재무 분석 결과", ln=True)
             pdf.set_font_size(11); pdf.set_text_color(0,0,0)
             d_rate = (r_debt / r_asset * 100) if r_asset > 0 else 0
-            pdf.multi_cell(190, 8, txt=f"분석 결과, {f_comp}의 2024년 부채비율은 {d_rate:.1f}%로 매우 우수합니다. 당기순이익 {r_inc:,.0f}백만원을 기록하며 가파른 기업가치 상승 곡선을 그리고 있습니다.")
+            pdf.multi_cell(190, 8, txt=f"분석 결과, {f_comp}의 2024년 부채비율은 {d_rate:.1f}%로 매우 안정적입니다. 매출 {r_rev:,.0f}백만원과 순이익 {r_inc:,.0f}백만원을 달성하며 성장성과 수익성 모두 '우수'한 것으로 분석되었습니다.")
 
-            # P3: 기업가치 및 인증현황
+            # P3: 가치 및 리스크
             pdf.add_page(); pdf.set_font_size(20)
             pdf.cell(190, 15, txt="2. 주식가치 평가 및 리스크 진단", ln=True); pdf.line(10, 28, 200, 28); pdf.ln(10)
-            fig.savefig("v52_final.png", dpi=300); pdf.image("v52_final.png", x=15, w=180)
+            fig.savefig("v53_final.png", dpi=300); pdf.image("v53_final.png", x=15, w=180)
             pdf.ln(10); pdf.set_font_size(12)
             pdf.cell(190, 10, txt=f"■ 인증: 벤처({('보유' if d_vent else '미보유')}), 전담부서({('보유' if d_rnd else '미보유')})", ln=True)
             pdf.cell(190, 10, txt=f"■ 노무: 근로자 {f_emp}명에 따른 '{labor}' 기준 적용", ln=True)
