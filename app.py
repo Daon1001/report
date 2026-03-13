@@ -5,6 +5,8 @@ import io
 import os
 import base64
 import fitz  # PyMuPDF
+import json
+import re
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
@@ -12,7 +14,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib import colors
 
 # --- [1. API 키 및 폰트 설정] ---
-# 사용자님이 제공하신 API 키를 직접 설정
+# 사용자님께서 제공해주신 키를 직접 사용합니다.
 GEMINI_API_KEY = "AIzaSyDH8HKJTzsdY0rZzkqmJ_Sx2QrPbu9dBy0"
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -25,21 +27,22 @@ def load_font():
         except: pass
     return 'Helvetica'
 
-# --- [2. 수치 한글 변환 함수 (천원 -> 억/만 단위)] ---
+# --- [2. 수치 변환 함수 (천원 -> 한글 억/만 단위)] ---
 def format_to_krw_text(val):
     try:
+        if not val: return "데이터 없음"
         clean_val = str(val).replace(',', '').strip()
         total_won = int(float(clean_val)) * 1000
-        if total_won == 0: return "해당 없음"
+        if total_won == 0: return "0원"
         eok = total_won // 100000000
         man = (total_won % 100000000) // 10000
         res = []
         if eok > 0: res.append(f"{eok}억")
         if man > 0: res.append(f"{man:,}만")
         return " ".join(res) + " 원"
-    except: return "0원"
+    except: return "데이터 없음"
 
-# --- [3. Gemini AI: 파일 분석 및 실데이터 추출] ---
+# --- [3. Gemini AI: 파일 분석 및 실데이터/개요 추출] ---
 def extract_smart_data(files):
     model = genai.GenerativeModel('gemini-1.5-pro')
     all_context = ""
@@ -54,38 +57,31 @@ def extract_smart_data(files):
             except: pass
 
     prompt = f"""
-    당신은 전문 경영 분석가입니다. 아래 자료에서 '분석 대상 업체'의 정보를 찾아 JSON으로만 답변하세요.
-    1. 업체명을 가장 먼저 식별하세요.
-    2. 재무수치는 자료 속 천 단위 수치를 찾아 숫자로만 추출하세요 (예: 4137922).
-    3. 사업내용은 자료를 근거로 구체적으로(예: PVC 창호 제조 등) 1줄 요약하세요.
+    당신은 전문 경영 분석가입니다. 제공된 자료를 분석하여 리포트 대상 업체의 정보를 JSON으로 답변하세요.
+    - target_company: 분석 대상 업체명
+    - ceo_name: 대표자 성명
+    - biz_desc: 이 회사가 무엇을 하는지(예: PVC 창호 제조 등) 자료를 근거로 1줄 요약
+    - rev_24, rev_23, income_24, asset_24, debt_24: 재무제표의 '천 단위' 수치 그대로 추출
     
-    JSON 형식:
-    {{
-        "company": "업체명",
-        "ceo": "대표자명",
-        "biz_desc": "사업내용 요약",
-        "rev_24": 2024매출액,
-        "rev_23": 2023매출액,
-        "income_24": 2024순이익,
-        "asset_24": 2024자산총계,
-        "debt_24": 2024부채총계
-    }}
-    자료: {all_context[:28000]}
+    자료내용:
+    {all_context[:25000]}
     """
     try:
         response = model.generate_content(prompt)
-        import json
-        return json.loads(response.text.replace('```json', '').replace('```', '').strip())
+        # JSON 형식만 골라내기
+        json_str = re.search(r'\{.*\}', response.text, re.DOTALL).group()
+        return json.loads(json_str)
     except:
-        return {"company": "분석 대상 기업", "biz_desc": "재무 진단 분석"}
+        return {"target_company": "분석 대상 기업", "ceo_name": "확인 필요", "biz_desc": "재무 경영 분석"}
 
-# --- [4. 나노바나나 방식: 지능형 객체 삭제 및 치환 엔진] ---
+# --- [4. 나노바나나 방식: 객체 제거 및 데이터 주입 엔진] ---
 class NanoBananaReportEngine:
     def __init__(self, data, font_name):
         self.data = data
         self.font = font_name
         self.output_pdf = io.BytesIO()
         
+        # 1. result.txt에서 템플릿 로드
         if os.path.exists("./result.txt"):
             with open("./result.txt", "r", encoding="utf-8") as f:
                 b64_str = f.read().strip()
@@ -98,22 +94,23 @@ class NanoBananaReportEngine:
         if not self.template_doc:
             return None
 
-        # 1. 낡은 데이터 '삭제' 작업 (나노바나나 방식)
-        # 샘플 템플릿의 특정 영역을 깨끗이 밀어버립니다.
+        # 2. 기존 데이터 '나노바나나'식 삭제 (Redaction)
         for i, page in enumerate(self.template_doc):
-            if i == 0: # 1페이지 표지 영역 삭제
-                page.add_redact_annot(fitz.Rect(50, 100, 550, 250), fill=(1, 1, 1)) # 회사명/제목
-                page.add_redact_annot(fitz.Rect(50, 150, 400, 220), fill=(1, 1, 1)) # 대표자/사업내용
-            elif i == 2: # 3페이지 재무 데이터 영역 삭제
-                page.add_redact_annot(fitz.Rect(200, 120, 550, 280), fill=(1, 1, 1)) 
+            # 텍스트 검색 삭제
+            for target in ["주식회사 케이에이치오토", "케이에이치오토", "임원근", "0원"]:
+                for inst in page.search_for(target):
+                    page.add_redact_annot(inst, fill=(1, 1, 1))
             
-            # 하단바 회사명 삭제
-            for inst in page.search_for("주식회사 케이에이치오토"):
-                page.add_redact_annot(inst, fill=(1, 1, 1))
+            # 특정 영역 강제 삭제 (검색 실패 대비)
+            if i == 0: # 표지
+                page.add_redact_annot(fitz.Rect(50, 100, 550, 250), fill=(1, 1, 1)) # 회사명
+                page.add_redact_annot(fitz.Rect(50, 150, 400, 220), fill=(1, 1, 1)) # 대표/사업개요
+            elif i == 2: # 재무표
+                page.add_redact_annot(fitz.Rect(200, 120, 550, 280), fill=(1, 1, 1)) # 숫자 칸
             
             page.apply_redactions()
 
-        # 2. 새로운 데이터 '주입' 작업 (치환)
+        # 3. 데이터 삽입용 레이어 생성
         overlay_buffer = io.BytesIO()
         c = canvas.Canvas(overlay_buffer, pagesize=A4)
         w, h = A4
@@ -121,15 +118,15 @@ class NanoBananaReportEngine:
         for i in range(len(self.template_doc)):
             c.setFont(self.font, 10)
             
-            if i == 0: # 표지 데이터 입히기
+            if i == 0: # 표지 데이터 주입
                 c.setFont(self.font, 36); c.setFillColor(colors.HexColor("#1A3A5E"))
-                c.drawCentredString(w/2, h - 130, self.data.get('company'))
-                c.setFont(self.font, 13); c.setFillColor(colors.black)
-                c.drawString(80, 205, f"대표자: {self.data.get('ceo', '확인필요')}")
-                c.drawString(80, 185, f"주요사업: {self.data.get('biz_desc')}")
-                c.drawString(80, 165, "작성자: 중소기업경영지원단")
+                c.drawCentredString(w/2, h - 130, self.data.get('target_company'))
+                c.setFont(self.font, 14); c.setFillColor(colors.black)
+                c.drawString(100, 205, f"대표자: {self.data.get('ceo_name')}")
+                c.drawString(100, 180, f"주요사업: {self.data.get('biz_desc')}")
+                c.drawString(100, 160, "작성자: 중소기업경영지원단")
 
-            elif i == 2: # 재무 수치 대입
+            elif i == 2: # 재무 데이터 주입
                 c.setFont(self.font, 11); c.setFillColor(colors.black)
                 c.drawString(385, h - 145, format_to_krw_text(self.data.get('rev_24')))
                 c.drawString(235, h - 145, format_to_krw_text(self.data.get('rev_23')))
@@ -137,43 +134,59 @@ class NanoBananaReportEngine:
                 c.drawString(385, h - 198, format_to_krw_text(self.data.get('asset_24')))
                 c.drawString(385, h - 225, format_to_krw_text(self.data.get('debt_24')))
 
-            # 모든 페이지 하단에 현재 업체명 표시
+            # 하단 회사명 치환
             c.setFont(self.font, 9); c.setFillColor(colors.grey)
-            c.drawString(50, 35, f"CO-PARTNER | {self.data.get('company')}")
+            c.drawString(50, 35, f"CO-PARTNER | {self.data.get('target_company')}")
             c.showPage()
         
         c.save()
         overlay_buffer.seek(0)
         overlay_doc = fitz.open(stream=overlay_buffer.read(), filetype="pdf")
         
+        # 4. 레이어 병합 및 버퍼 저장
         for i in range(len(self.template_doc)):
             page = self.template_doc[i]
             page.show_pdf_page(page.rect, overlay_doc, i)
         
+        # 최종 PDF를 메모리 버퍼에 씀
         self.template_doc.save(self.output_pdf)
         self.template_doc.close()
-        self.output_pdf.seek(0)
+        self.output_pdf.seek(0) # 버퍼 포인터를 시작점으로 이동 (다운로드 가능하게 함)
         return self.output_pdf
 
-# --- [5. UI 및 실행부] ---
+# --- [5. UI 및 실행] ---
 def main():
-    st.set_page_config(page_title="AI Master Report System", layout="wide")
+    st.set_page_config(page_title="AI Master CEO Report", layout="wide")
     f_name = load_font()
-    st.title("📂 지능형 범용 CEO 리포트 시스템 (나노바나나 방식)")
+    st.title("📂 지능형 범용 CEO 리포트 생성 시스템")
     
-    st.write("샘플 양식(`result.txt`)을 기반으로, 업로드된 파일의 실데이터를 지능적으로 채워넣습니다.")
+    st.markdown("""
+    분석하려는 **기업의 파일(엑셀, PDF)**을 업로드하세요. 
+    제미나이 AI가 파일을 분석하여 샘플의 낡은 정보를 제거(나노바나나 방식)한 뒤 실데이터로 완벽히 치환합니다.
+    """)
 
-    files = st.file_uploader("기업 데이터 파일 업로드 (Excel, PDF)", accept_multiple_files=True)
+    files = st.file_uploader("기업 데이터 파일 업로드 (Excel, PDF 등)", accept_multiple_files=True)
     
-    if files and st.button("🚀 리포트 생성"):
-        with st.spinner("AI가 데이터를 분석하여 템플릿을 수정 중입니다..."):
-            smart_data = extract_smart_data(files)
-            engine = NanoBananaReportEngine(smart_data, f_name)
-            final_pdf = engine.generate()
+    if files and st.button("🚀 지능형 리포트 생성 시작"):
+        with st.spinner("AI가 데이터를 분석하고 113페이지 리포트를 제작 중입니다..."):
+            # 1. 데이터 추출
+            extracted_data = extract_smart_data(files)
             
-            if final_pdf:
-                st.success(f"✅ {smart_data.get('company')} 리포트 생성 완료!")
-                st.download_button("📥 리포트 다운로드", final_pdf, f"CEO_Report_{smart_data.get('company')}.pdf", "application/pdf")
+            # 2. 리포트 생성
+            engine = NanoBananaReportEngine(extracted_data, f_name)
+            final_pdf_buffer = engine.generate()
+            
+            if final_pdf_buffer:
+                st.success(f"✅ {extracted_data.get('target_company')} 리포트 생성 완료!")
+                # 다운로드 버튼
+                st.download_button(
+                    label="📥 최종 리포트 다운로드",
+                    data=final_pdf_buffer,
+                    file_name=f"CEO_Report_{extracted_data.get('target_company')}.pdf",
+                    mime="application/pdf"
+                )
+            else:
+                st.error("리포트 생성 중 오류가 발생했습니다. result.txt 파일을 확인하세요.")
 
 if __name__ == "__main__":
     main()
