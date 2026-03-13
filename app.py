@@ -1,230 +1,125 @@
-import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib import colors
 import os
-import google.generativeai as genai
-from fpdf import FPDF
-import re
-import json
-from datetime import date
-import io
 
-# --- [0. 페이지 설정 및 초기화] ---
-st.set_page_config(page_title="SME 종합 재무진단 AI v53.0", layout="wide")
+# 1. 환경 설정
+INPUT_FILE = "cretop_data.xlsx"  # 크레탑에서 다운로드한 파일명으로 변경
+OUTPUT_DIR = "output"
+FONT_PATH = "C:/Windows/Fonts/malgun.ttf"  # Windows 기준, 맥/리눅스는 해당 경로 폰트로 수정
 
-# 변수 초기화 (NameError 방지)
-f_comp, f_ceo, f_emp = "미상", "미상", 0
-r_rev, r_inc, r_asset, r_debt = 0.0, 0.0, 0.0, 0.0
-d_rev, d_inc, d_ast, d_dbt = [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
-d_vent, d_rnd = False, False
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
 
-# 폰트 설정 (malgun.ttf 필수)
-base_dir = os.path.dirname(__file__)
-font_path = os.path.join(base_dir, "malgun.ttf")
+# 한글 폰트 등록
+pdfmetrics.registerFont(TTFont('HanguI', FONT_PATH))
 
-def set_korean_font(path):
-    try:
-        if os.path.exists(path):
-            fm.fontManager.addfont(path)
-            font_prop = fm.FontProperties(fname=path)
-            plt.rc('font', family=font_prop.get_name())
-            plt.rcParams['axes.unicode_minus'] = False
-            return True
-    except: pass
-    return False
+class CEOReportGenerator:
+    def __init__(self, excel_path):
+        self.excel_path = excel_path
+        self.data = {}
+        self.analysis = {}
 
-has_font = set_korean_font(font_path)
-
-# Secrets 보안 로드
-try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-except:
-    GEMINI_API_KEY = None
-
-st.markdown("""
-<style>
-    .stApp { background-color: #f4f7f9 !important; }
-    .premium-header { 
-        background: linear-gradient(135deg, #0b1f52 0%, #1e3a8a 100%); 
-        color: white; padding: 2.5rem; border-radius: 20px; text-align: center; margin-bottom: 2rem;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.1); border-bottom: 8px solid #d4af37;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# --- [1. 사용자 보안 및 관리자 시스템] ---
-DB_FILE = "users.csv"
-def load_db():
-    if not os.path.exists(DB_FILE):
-        df = pd.DataFrame([{"email": "incheon00@gmail.com", "approved": True, "is_admin": True}])
-        df.to_csv(DB_FILE, index=False)
-        return df
-    return pd.read_csv(DB_FILE)
-
-def save_db(df): df.to_csv(DB_FILE, index=False)
-user_db = load_db()
-
-if 'auth_user' not in st.session_state: st.session_state.auth_user = None
-
-if st.session_state.auth_user is None:
-    st.markdown('<div style="background:white; padding:50px; border-radius:20px; max-width:500px; margin:10vh auto; text-align:center; border-top:10px solid #0b1f52; box-shadow: 0 15px 30px rgba(0,0,0,0.15);">', unsafe_allow_html=True)
-    st.markdown('<h1 style="color:#0b1f52;">🏛️ 중소기업경영지원단</h1>', unsafe_allow_html=True)
-    st.markdown("<p style='color:#666;'>제미나이 AI 통합 시스템 v53.0</p>", unsafe_allow_html=True)
-    email = st.text_input("아이디(이메일)").strip().lower()
-    if st.button("시스템 로그인", type="primary", use_container_width=True):
-        row = user_db[user_db['email'] == email]
-        if not row.empty and row.iloc[0]['approved']:
-            st.session_state.auth_user = email; st.rerun()
-        else: st.error("승인이 필요한 계정입니다.")
-    st.markdown('</div>', unsafe_allow_html=True); st.stop()
-
-# --- [2. 제미나이 AI 초정밀 분석 엔진] ---
-
-def analyze_with_gemini(files):
-    if not GEMINI_API_KEY:
-        st.error("API 키가 설정되지 않았습니다.")
-        return None
-
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    # 쪼개진 텍스트 레이어를 합치기 위한 정밀 지침
-    prompt = """
-    이 파일들은 기업 신용 분석 보고서와 재무 자료야. 
-    텍스트가 '\"기업명\\n\",\"(주)메이홈\\n\"' 처럼 줄바꿈과 따옴표로 심하게 쪼개져 있어. 
-    너는 이 쪼개진 단어들을 먼저 하나로 합쳐서 문맥을 파악한 뒤 데이터를 추출해야 해.
-    
-    반드시 아래 JSON 형식으로만 답변해:
-    {
-        "comp_name": "(주)메이홈 등 기업명",
-        "ceo_name": "박승미 등 대표자명",
-        "emp_count": 10,
-        "revenue": [2022년액, 2023년액, 2024년액],
-        "profit": [2022년액, 2023년액, 2024년액],
-        "asset": [2022년액, 2023년액, 2024년액],
-        "debt": [2022년액, 2023년액, 2024년액],
-        "venture": true/false,
-        "rnd_dept": true/false
-    }
-    재무 수치는 단위가 '백만원'이면 숫자로 환산해 (예: 4,138 -> 4138).
-    """
-    
-    content = [prompt]
-    for f in files:
-        f_bytes = f.read()
-        content.append({"mime_type": f.type, "data": f_bytes})
-        f.seek(0)
-    
-    try:
-        response = model.generate_content(content)
-        json_str = re.search(r'\{.*\}', response.text, re.DOTALL).group()
-        return json.loads(json_str)
-    except Exception as e:
-        st.error(f"AI 분석 중 오류: {e}")
-        return None
-
-# --- [3. 메인 화면 구성] ---
-st.markdown('<div class="premium-header"><h1>📊 AI 종합 경영 진단 시스템</h1></div>', unsafe_allow_html=True)
-
-with st.sidebar:
-    st.write(f"👤 담당자: **{st.session_state.auth_user}**")
-    if st.button("로그아웃"): st.session_state.auth_user = None; st.rerun()
-    
-    user_info = user_db[user_db['email'] == st.session_state.auth_user].iloc[0]
-    if user_info['is_admin']:
-        st.divider(); st.subheader("👑 관리자 통제 센터")
-        st.dataframe(user_db[['email', 'approved']], use_container_width=True)
-        target = st.selectbox("권한 변경 계정", user_db['email'])
-        if st.button("승인 상태 전환"):
-            user_db.loc[user_db['email'] == target, 'approved'] = not user_db.loc[user_db['email'] == target, 'approved'].iloc[0]
-            save_db(user_db); st.rerun()
-
-col_l, col_r = st.columns([1, 1.4])
-
-with col_l:
-    st.subheader("📂 진단 데이터 통합 업로드")
-    up_files = st.file_uploader("개요.pdf 및 재무 엑셀을 함께 업로드하세요.", accept_multiple_files=True)
-    
-    if up_files:
-        if 'ai_data' not in st.session_state:
-            with st.spinner("🚀 AI가 파편화된 데이터를 재조합하여 판독 중입니다..."):
-                st.session_state.ai_data = analyze_with_gemini(up_files)
+    def load_data(self):
+        """크레탑 엑셀 시트 분석 및 데이터 추출"""
+        # 실제 엑셀의 컬럼명에 맞춰 조정이 필요합니다.
+        df = pd.read_excel(self.excel_path)
         
-        if st.session_state.ai_data:
-            d = st.session_state.ai_data
-            f_comp = d.get('comp_name', "미상")
-            f_ceo = d.get('ceo_name', "미상")
-            f_emp = d.get('emp_count', 0)
-            d_rev, d_inc, d_ast, d_dbt = d.get('revenue', [0,0,0]), d.get('profit', [0,0,0]), d.get('asset', [0,0,0]), d.get('debt', [0,0,0])
-            d_vent, d_rnd = d.get('venture', False), d.get('rnd_dept', False)
+        # 샘플 로직: 항목명과 연도별 수치 추출
+        # 예: df.loc[df['항목'] == '매출액', '2025'].values[0]
+        try:
+            self.data['company_name'] = "주식회사 케이에이치오토" # 예시
+            self.data['revenue'] = [1000, 1200, 1500] # 최근 3개년 매출 예시
+            self.data['net_income'] = [100, 120, 180] # 최근 3개년 순이익 예시
+            self.data['total_assets'] = 5000
+            self.data['total_debt'] = 2000
+        except Exception as e:
+            print(f"데이터 파싱 오류: {e}. 엑셀 형식을 확인하세요.")
 
-            st.success("✅ AI 데이터 동기화 완료")
-            with st.expander("📝 데이터 최종 확인 및 보정", expanded=True):
-                f_comp = st.text_input("🏢 기업 공식 명칭", f_comp)
-                f_ceo = st.text_input("👤 대표자 성함", f_ceo)
-                f_emp = st.number_input("👥 종업원수(명)", value=f_emp)
-                st.divider()
-                # (주)메이홈 재무 수치 자동 연동
-                r_rev = st.number_input("2024 매출액 (백만원)", value=float(d_rev[2]) if len(d_rev)>2 else 0.0)
-                r_inc = st.number_input("2024 순이익", value=float(d_inc[2]) if len(d_inc)>2 else 0.0)
-                r_asset = st.number_input("2024 자산총계", value=float(d_ast[2]) if len(d_ast)>2 else 0.0)
-                r_debt = st.number_input("2024 부채총계", value=float(d_dbt[2]) if len(d_dbt)>2 else 0.0)
-
-with col_r:
-    st.subheader("📈 실시간 진단 결과")
-    if up_files and 'ai_data' in st.session_state:
-        labor = "5인 이상" if f_emp >= 5 else "5인 미만"
-        st.info(f"분석 결과: 근로자 **{f_emp}명**으로 **'{labor} 사업장'** 노무 가이드가 적용됩니다.")
+    def run_analysis(self):
+        """재무 및 기업가치 분석 엔진"""
+        # 1. 성장성 (매출증가율)
+        rev = self.data['revenue']
+        self.analysis['growth'] = ((rev[-1] - rev[-2]) / rev[-2]) * 100
         
-        # 가치 평가 시뮬레이션
-        stock_val = ((r_inc * 1000 / 0.1)*0.6 + (r_asset - r_debt)*1000*0.4) / 100000
+        # 2. 수익성 (영업이익률 - 순이익으로 대체 예시)
+        self.analysis['profitability'] = (self.data['net_income'][-1] / rev[-1]) * 100
         
-        fig, ax = plt.subplots(figsize=(8, 4.5))
-        ax.plot(['현재', '3년후', '10년후'], [stock_val, stock_val*1.4, stock_val*2.8], marker='o', color='#0b1f52', linewidth=4)
-        ax.set_title(f"{f_comp} 주식 가치 상승 시나리오")
-        st.pyplot(fig)
+        # 3. 안정성 (부채비율)
+        self.analysis['stability'] = (self.data['total_debt'] / self.data['total_assets']) * 100
+        
+        # 4. 기업가치평가 (간이 상증세법 로직)
+        # (순손익가치 * 0.6) + (순자산가치 * 0.4) - 매우 간소화된 버전
+        avg_income = sum(self.data['net_income']) / len(self.data['net_income'])
+        self.analysis['stock_value'] = (avg_income / 0.1) * 0.6 + (self.data['total_assets'] - self.data['total_debt']) * 0.4
 
-        if st.button("🚀 종합 한글 보고서 발행", type="primary", use_container_width=True):
-            pdf = FPDF()
-            if has_font:
-                pdf.add_font("Malgun", "", font_path); pdf.set_font("Malgun", size=12)
-            else: pdf.set_font("helvetica", size=12)
-            
-            # P1: 표지
-            pdf.add_page(); pdf.set_fill_color(11, 31, 82); pdf.rect(0, 0, 210, 297, 'F')
-            pdf.set_text_color(255, 255, 255); pdf.ln(90); pdf.set_font_size(32)
-            pdf.cell(190, 25, txt="종합 재무경영 진단 보고서", ln=True, align='C')
-            pdf.set_font_size(18); pdf.cell(190, 20, txt=f"대상기업: {f_comp} / 대표: {f_ceo}", ln=True, align='C')
-            
-            # P2: 정밀 재무 분석
-            pdf.add_page(); pdf.set_text_color(0,0,0); pdf.set_font_size(20)
-            pdf.cell(190, 15, txt="1. 정밀 재무제표 및 AI 분석 (단위: 천원)", ln=True); pdf.line(10, 28, 200, 28); pdf.ln(10)
-            pdf.set_fill_color(240, 240, 240); pdf.set_font_size(11)
-            pdf.cell(50, 10, "항목", 1, 0, 'C', True); pdf.cell(70, 10, "2023년", 1, 0, 'C', True); pdf.cell(70, 10, "2024년 (최근)", 1, 1, 'C', True)
-            
-            f_rows = [
-                ("자산 총계", d_ast[1] if len(d_ast)>1 else 0, r_asset), 
-                ("부채 총계", d_dbt[1] if len(d_dbt)>1 else 0, r_debt), 
-                ("매출액", d_rev[1] if len(d_rev)>1 else 0, r_rev), 
-                ("당기순이익", d_inc[1] if len(d_inc)>1 else 0, r_inc)
-            ]
-            for n, v1, v2 in f_rows:
-                pdf.cell(50, 10, n, 1); pdf.cell(70, 10, f"{v1:,.0f}", 1, 0, 'R'); pdf.cell(70, 10, f"{v2:,.0f}", 1, 1, 'R')
-            
-            pdf.ln(10); pdf.set_font_size(13); pdf.set_text_color(11, 31, 82)
-            pdf.cell(190, 10, txt="▶ 전문가 종합 재무 분석 결과", ln=True)
-            pdf.set_font_size(11); pdf.set_text_color(0,0,0)
-            d_rate = (r_debt / r_asset * 100) if r_asset > 0 else 0
-            pdf.multi_cell(190, 8, txt=f"분석 결과, {f_comp}의 2024년 부채비율은 {d_rate:.1f}%로 매우 안정적입니다. 매출 {r_rev:,.0f}백만원과 순이익 {r_inc:,.0f}백만원을 달성하며 성장성과 수익성 모두 '우수'한 것으로 분석되었습니다.")
+    def create_visuals(self):
+        """차트 생성"""
+        plt.figure(figsize=(6, 4))
+        plt.plot(['2023', '2024', '2025'], self.data['revenue'], marker='o', label='Revenue')
+        plt.plot(['2023', '2024', '2025'], self.data['net_income'], marker='s', label='Net Income')
+        plt.title('Financial Trend')
+        plt.legend()
+        chart_path = os.path.join(OUTPUT_DIR, 'trend_chart.png')
+        plt.savefig(chart_path)
+        plt.close()
+        return chart_path
 
-            # P3: 가치 및 리스크
-            pdf.add_page(); pdf.set_font_size(20)
-            pdf.cell(190, 15, txt="2. 주식가치 평가 및 리스크 진단", ln=True); pdf.line(10, 28, 200, 28); pdf.ln(10)
-            fig.savefig("v53_final.png", dpi=300); pdf.image("v53_final.png", x=15, w=180)
-            pdf.ln(10); pdf.set_font_size(12)
-            pdf.cell(190, 10, txt=f"■ 인증: 벤처({('보유' if d_vent else '미보유')}), 전담부서({('보유' if d_rnd else '미보유')})", ln=True)
-            pdf.cell(190, 10, txt=f"■ 노무: 근로자 {f_emp}명에 따른 '{labor}' 기준 적용", ln=True)
+    def generate_pdf(self):
+        """PDF 리포트 생성"""
+        chart_path = self.create_visuals()
+        file_path = os.path.join(OUTPUT_DIR, f"CEO_Report_{self.data['company_name']}.pdf")
+        
+        c = canvas.Canvas(file_path, pagesize=A4)
+        w, h = A4
 
-            pdf_out = bytes(pdf.output())
-            st.download_button("💾 한글 종합 보고서 다운로드", data=pdf_out, file_name=f"진단보고서_{f_comp}.pdf")
+        # 헤더
+        c.setFont('HanguI', 20)
+        c.drawCentredString(w/2, h - 50, f"{self.data['company_name']} 재무경영진단 리포트")
+        
+        c.setStrokeColor(colors.blue)
+        c.line(50, h - 70, w - 50, h - 70)
+
+        # 주요 지표 섹션
+        c.setFont('HanguI', 14)
+        c.drawString(50, h - 110, "[1. 핵심 재무 지표]")
+        c.setFont('HanguI', 11)
+        c.drawString(70, h - 140, f"• 매출성장율: {self.analysis['growth']:.2f}%")
+        c.drawString(70, h - 160, f"• 순이익률: {self.analysis['profitability']:.2f}%")
+        c.drawString(70, h - 180, f"• 부채비율: {self.analysis['stability']:.2f}%")
+
+        # 기업가치 섹션
+        c.setFont('HanguI', 14)
+        c.drawString(50, h - 230, "[2. 기업가치 추정]")
+        c.setFont('HanguI', 11)
+        c.drawString(70, h - 260, f"• 추정 기업가치: 약 {self.analysis['stock_value']:,.0f} 만원")
+        c.drawString(70, h - 280, "  (상증세법 보충적 평가방법 간이 계산 결과)")
+
+        # 차트 삽입
+        c.drawImage(chart_path, 50, h - 550, width=450, preserveAspectRatio=True)
+
+        # 하단 푸터
+        c.setFont('HanguI', 9)
+        c.setStrokeColor(colors.lightgrey)
+        c.line(50, 50, w - 50, 50)
+        c.drawString(50, 40, "본 리포트는 크레탑 데이터를 바탕으로 자동 생성되었습니다.")
+
+        c.showPage()
+        c.save()
+        print(f"리포트 생성 완료: {file_path}")
+
+# 실행부
+if __name__ == "__main__":
+    # 1. 엑셀 파일이 있는지 확인 (실제 크레탑 파일명으로 교체 필요)
+    if os.path.exists(INPUT_FILE):
+        gen = CEOReportGenerator(INPUT_FILE)
+        gen.load_data()
+        gen.run_analysis()
+        gen.generate_pdf()
+    else:
+        # 파일이 없을 경우 테스트용 가상 데이터 생성 로직을 넣거나 안내 메시지 출력
+        print(f"'{INPUT_FILE}' 파일이 없습니다. 크레탑 엑셀 파일을 준비해주세요.")
