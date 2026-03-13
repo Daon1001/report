@@ -11,11 +11,12 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib import colors
 
-# --- [1. Gemini API 설정] ---
+# --- [1. Gemini API 및 폰트 설정] ---
+# Streamlit Secrets에서 api_key를 가져옵니다.
 if "api_key" in st.secrets:
     genai.configure(api_key=st.secrets["api_key"])
 else:
-    # 예비용 직접 입력 (Secrets 미설정 시)
+    # 예비용으로 직접 입력된 키를 사용합니다.
     genai.configure(api_key="AIzaSyDH8HKJTzsdY0rZzkqmJ_Sx2QrPbu9dBy0")
 
 def load_font():
@@ -41,8 +42,8 @@ def format_to_krw_text(val):
         return " ".join(res) + " 원"
     except: return "0원"
 
-# --- [3. Gemini AI: 범용 업체 정보 및 수치 추출] ---
-def extract_universal_data(files):
+# --- [3. Gemini AI: 업로드된 파일에서 지능형 데이터 추출] ---
+def extract_intelligent_data(files):
     model = genai.GenerativeModel('gemini-1.5-pro')
     all_context = ""
     for f in files:
@@ -55,15 +56,16 @@ def extract_universal_data(files):
                 all_context += df.to_string()
             except: pass
 
+    # 제미나이에게 업로드된 파일의 주체를 파악하고 데이터를 뽑으라고 명령합니다.
     prompt = f"""
-    당신은 전문 경영 분석가입니다. 제공된 자료에서 분석 대상 업체(메이홈 또는 다른 모든 기업)의 정보를 찾아 JSON으로만 답변하세요.
-    - target_company: 업체명
-    - ceo_name: 대표자 이름
-    - biz_summary: 회사가 하는 일(예: PVC 창호 제조 등)을 문서 내용을 근거로 요약
-    - rev_24, rev_23, income_24, asset_24, debt_24: 재무제표의 '천 단위' 수치 그대로 추출
+    당신은 전문 경영 컨설턴트입니다. 제공된 자료를 분석하여 리포트의 주인공이 되는 '대상 업체'의 정보를 JSON으로만 답변하세요.
+    - target_company: 분석 대상 업체명 (예: (주)메이홈 등 자료에서 식별된 이름)
+    - ceo_name: 해당 업체의 대표자 이름
+    - biz_desc: 이 회사의 주요 사업 내용을 자료를 바탕으로 1~2줄 요약
+    - rev_24, rev_23, income_24, asset_24, debt_24: 재무제표의 '천 단위' 수치를 정확히 찾아 숫자로만 추출
     
     자료내용:
-    {all_context[:28000]}
+    {all_context[:25000]}
     """
     try:
         response = model.generate_content(prompt)
@@ -71,10 +73,10 @@ def extract_universal_data(files):
         clean_json = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(clean_json)
     except:
-        return {"target_company": "분석 대상 기업", "biz_summary": "재무 분석 및 경영 진단"}
+        return {"target_company": "추출 실패", "biz_desc": "자료 분석 불가"}
 
-# --- [4. 나노바나나 방식: 객체 제거 및 지능형 치환 엔진] ---
-class SmartObjectEraserEngine:
+# --- [4. 나노바나나 방식: 객체 제거 및 실데이터 주입 엔진] ---
+class IntelligentObjectEraser:
     def __init__(self, data, font_name):
         self.data = data
         self.font = font_name
@@ -92,18 +94,25 @@ class SmartObjectEraserEngine:
         if not self.template_doc:
             return None
 
-        # 1. 원본 샘플 데이터 삭제 (Redaction)
-        # 나노바나나 기능처럼 기존의 불필요한 객체(글자)를 완전히 제거합니다.
-        for page in self.template_doc:
-            targets = ["주식회사 케이에이치오토", "케이에이치오토", "임원근", "0원", "재무 진단 분석"]
+        # 1. 객체 제거(Redaction) 단계: 샘플의 낡은 텍스트 영역을 좌표 단위로 삭제
+        for i, page in enumerate(self.template_doc):
+            # 텍스트 검색을 통한 삭제 (케이에이치오토, 0원 등)
+            targets = ["주식회사 케이에이치오토", "케이에이치오토", "0원", "재무 진단 분석", "임원근"]
             for target in targets:
                 insts = page.search_for(target)
                 for inst in insts:
-                    # 해당 영역을 PDF 구조상에서 완전히 삭제(흰색 소거)
                     page.add_redact_annot(inst, fill=(1, 1, 1))
+            
+            # 검색이 안 될 경우를 대비해 핵심 좌표 영역 강제 소거 (나노바나나 방식)
+            if i == 0: # 1페이지 표지 영역
+                page.add_redact_annot(fitz.Rect(50, 100, 550, 250), fill=(1, 1, 1)) # 타이틀/회사명
+                page.add_redact_annot(fitz.Rect(50, 600, 400, 800), fill=(1, 1, 1)) # 대표자/사업개요
+            elif i == 2: # 3페이지 재무 데이터 영역
+                page.add_redact_annot(fitz.Rect(200, 100, 550, 300), fill=(1, 1, 1)) # 숫자 칸들
+                
             page.apply_redactions()
 
-        # 2. 제거된 자리에 제미나이가 추출한 실데이터 주입
+        # 2. 실데이터 주입(Injection) 단계: 제미나이가 가져온 정보를 삽입
         overlay_buffer = io.BytesIO()
         c = canvas.Canvas(overlay_buffer, pagesize=A4)
         w, h = A4
@@ -111,26 +120,26 @@ class SmartObjectEraserEngine:
         for i in range(len(self.template_doc)):
             c.setFont(self.font, 10)
             
-            # [1페이지: 표지 및 개요 치환]
+            # [1페이지: 표지 및 동적 개요]
             if i == 0:
                 c.setFont(self.font, 36); c.setFillColor(colors.HexColor("#1A3A5E"))
-                c.drawCentredString(w/2, h - 130, self.data.get('target_company'))
-                c.setFont(self.font, 14); c.setFillColor(colors.black)
+                c.drawCentredString(w/2, h - 130, self.data.get('target_company', '분석 기업'))
+                c.setFont(self.font, 13); c.setFillColor(colors.black)
                 c.drawString(100, 205, f"대표자: {self.data.get('ceo_name', '확인 필요')}")
-                c.drawString(100, 180, f"주요사업: {self.data.get('biz_summary')}")
+                c.drawString(100, 180, f"주요사업: {self.data.get('biz_desc', '재무 경영 진단')}")
                 c.drawString(100, 160, "작성자: 중소기업경영지원단")
 
-            # [3페이지: 재무 지표 정밀 치환]
+            # [3페이지: 주요 재무 수치 주입]
             elif i == 2:
                 c.setFont(self.font, 11); c.setFillColor(colors.black)
-                # 제미나이가 뽑아온 실데이터를 억/만 단위로 변환해 삽입
-                c.drawString(385, h - 145, format_to_krw_text(self.data.get('rev_24'))) # 당기매출
-                c.drawString(235, h - 145, format_to_krw_text(self.data.get('rev_23'))) # 전기매출
-                c.drawString(385, h - 172, format_to_krw_text(self.data.get('income_24'))) # 순이익
-                c.drawString(385, h - 198, format_to_krw_text(self.data.get('asset_24')))  # 자산
-                c.drawString(385, h - 225, format_to_krw_text(self.data.get('debt_24')))   # 부채
+                # 제미나이가 추출한 숫자를 정확한 자리에 한글 단위로 변환해 삽입
+                c.drawString(385, h - 145, format_to_krw_text(self.data.get('rev_24', 0)))
+                c.drawString(235, h - 145, format_to_krw_text(self.data.get('rev_23', 0)))
+                c.drawString(385, h - 172, format_to_krw_text(self.data.get('income_24', 0)))
+                c.drawString(385, h - 198, format_to_krw_text(self.data.get('asset_24', 0)))
+                c.drawString(385, h - 225, format_to_krw_text(self.data.get('debt_24', 0)))
 
-            # 하단 공통 회사명 업데이트
+            # 모든 페이지 하단 회사명 업데이트
             c.setFont(self.font, 9); c.setFillColor(colors.grey)
             c.drawString(50, 35, f"CO-PARTNER | {self.data.get('target_company')}")
             c.showPage()
@@ -139,7 +148,7 @@ class SmartObjectEraserEngine:
         overlay_buffer.seek(0)
         overlay_doc = fitz.open(stream=overlay_buffer.read(), filetype="pdf")
         
-        # 3. 레이어 병합
+        # 3. 병합
         for i in range(len(self.template_doc)):
             page = self.template_doc[i]
             page.show_pdf_page(page.rect, overlay_doc, i)
@@ -149,25 +158,25 @@ class SmartObjectEraserEngine:
         self.output_pdf.seek(0)
         return self.output_pdf
 
-# --- [5. UI 메인] ---
+# --- [5. UI 및 실행] ---
 def main():
     st.set_page_config(page_title="AI Master Report System", layout="wide")
     f_name = load_font()
-    st.title("📂 지능형 범용 CEO 리포트 생성기")
+    st.title("📂 지능형 CEO 리포트 자동 생성기 (범용 치환형)")
     
     st.markdown("""
-    분석하려는 **어떤 기업의 파일(엑셀, PDF)**이라도 업로드하세요. 
-    제미나이 AI가 파일을 읽어 업체를 식별하고, 샘플의 낡은 정보를 제거한 뒤 실데이터로 채워넣습니다.
+    업로드된 파일에서 **제미나이 AI가 스스로 정보를 추출**하여 리포트를 완성합니다.
+    샘플의 낡은 정보는 완전히 제거(나노바나나 방식)되고 실데이터로 치환됩니다.
     """)
 
-    files = st.file_uploader("기업 데이터 파일 업로드 (Excel, PDF 등)", accept_multiple_files=True)
+    files = st.file_uploader("기업 데이터 파일 업로드 (PDF, Excel)", accept_multiple_files=True)
     
     if files and st.button("🚀 지능형 리포트 생성 시작"):
-        with st.spinner("AI가 파일의 맥락을 분석하고 데이터를 치환하는 중입니다..."):
-            # 1. 제미나이를 통한 동적 데이터 추출
-            extracted_data = extract_universal_data(files)
-            # 2. 객체 제거 및 데이터 주입 엔진 가동
-            engine = SmartObjectEraserEngine(extracted_data, f_name)
+        with st.spinner("AI가 파일을 읽고 데이터를 '삭제 및 주입' 중입니다..."):
+            # 1. Gemini를 통한 업체 식별 및 데이터 추출
+            extracted_data = extract_intelligent_data(files)
+            # 2. 리포트 엔진 가동
+            engine = IntelligentObjectEraser(extracted_data, f_name)
             final_pdf = engine.generate()
             
             if final_pdf:
