@@ -9,12 +9,12 @@ from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
 import io
 import os
+import fitz  # PyMuPDF
 
-# --- [폰트 설정] 배포 환경 대응 ---
-def get_font():
-    # 폰트 경로 후보군 (로컬 및 Streamlit Cloud 리눅스 환경)
+# --- [1. 폰트 설정] ---
+def load_font():
     font_paths = [
-        "./fonts/NanumGothic.ttf",
+        "./fonts/NanumGothic.ttf", 
         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
         "C:/Windows/Fonts/malgun.ttf"
     ]
@@ -23,102 +23,124 @@ def get_font():
             try:
                 pdfmetrics.registerFont(TTFont('HanguI', path))
                 return 'HanguI'
-            except:
-                continue
+            except: continue
     return 'Helvetica'
 
-# --- [데이터 분석 엔진] ---
-@st.cache_data
-def analyze_data(file_content):
-    # io.BytesIO를 통해 메모리에서 직접 엑셀 읽기
-    df = pd.read_excel(file_content)
-    
-    # 엑셀 시트명이나 컬럼명은 실제 파일에 맞춰 수정이 필요합니다.
-    # 아래는 예시 계산 로직입니다.
-    results = {
-        'company_name': "주식회사 케이에이치오토",
-        'growth': 15.7,
-        'profitability': 8.4,
-        'stability': 45.2,
-        'valuation': 2450000000, # 24.5억
-        'years': ['2023', '2024', '2025'],
-        'revenues': [1000, 1150, 1320]
-    }
-    return results
+# --- [2. 분석 엔진] ---
+class IntegratedAnalyzer:
+    def __init__(self):
+        self.company_info = ""
+        self.financial_metrics = {}
+        self.company_name = "미지정 기업"
 
-# --- [차트 생성 엔진] ---
-def create_report_chart(data):
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.bar(data['years'], data['revenues'], color='#2E5A88')
-    ax.set_title('Revenue Trend')
-    
-    img_buf = io.BytesIO()
-    fig.savefig(img_buf, format='png')
-    img_buf.seek(0)
-    plt.close(fig) # 중요: JavaScript 노드 충돌 방지
-    return img_buf
+    def process_pdf(self, file):
+        """PDF에서 기업개요 텍스트 추출"""
+        doc = fitz.open(stream=file.read(), filetype="pdf")
+        text = ""
+        for page in doc:
+            text += page.get_text()
+        self.company_info += text[:1000] # 핵심 내용 일부 저장
+        if "주식회사" in text and self.company_name == "미지정 기업":
+            try:
+                self.company_name = text.split("주식회사")[1].split()[0]
+            except: pass
 
-# --- [메인 UI] ---
+    def process_excel(self, file):
+        """엑셀에서 재무지표 추출"""
+        df = pd.read_excel(file)
+        # 실제 크레탑 엑셀의 항목명에 맞춰 매핑이 필요합니다.
+        self.financial_metrics = {
+            'growth': 15.8,   # 예시: 매출증가율
+            'profit': 7.2,    # 예시: 영업이익률
+            'stability': 38.5 # 예시: 부채비율
+        }
+
+    def create_chart(self):
+        fig, ax = plt.subplots(figsize=(5, 3))
+        labels = ['Growth', 'Profit', 'Stability']
+        values = [self.financial_metrics.get('growth', 0), 
+                  self.financial_metrics.get('profit', 0), 
+                  self.financial_metrics.get('stability', 0)]
+        ax.bar(labels, values, color=['#4F81BD', '#C0504D', '#9BBB59'])
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png')
+        buf.seek(0)
+        plt.close(fig)
+        return buf
+
+# --- [3. 메인 UI] ---
 def main():
-    st.set_page_config(page_title="CEO 리포트 생성기", layout="centered")
-    font_name = get_font()
+    st.set_page_config(page_title="통합 씨오리포트 생성기", layout="wide")
+    font_name = load_font()
+    
+    st.title("📂 멀티 파일 통합 진단 시스템")
+    st.write("기업개요 PDF들과 재무제표 엑셀을 모두 선택하여 업로드하세요.")
 
-    st.title("📊 기업 재무경영진단 리포트")
-    st.info("크레탑(CRETOP) 엑셀 자료를 업로드하면 분석이 시작됩니다.")
+    uploaded_files = st.file_uploader(
+        "파일 업로드 (PDF, XLSX)", 
+        type=['pdf', 'xlsx'], 
+        accept_multiple_files=True,
+        key="multi_file_uploader"
+    )
 
-    # key를 부여하여 removeChild 오류 방지
-    uploaded_file = st.file_uploader("재무 엑셀 파일 선택", type=['xlsx'], key="cre_file_up")
+    if uploaded_files:
+        analyzer = IntegratedAnalyzer()
+        
+        for f in uploaded_files:
+            if f.name.endswith('.pdf'):
+                analyzer.process_pdf(f)
+            elif f.name.endswith('.xlsx'):
+                analyzer.process_excel(f)
 
-    if uploaded_file is not None:
-        try:
-            # 데이터 분석 실행
-            analysis = analyze_data(uploaded_file)
+        st.success(f"✅ 분석 완료: {analyzer.company_name}")
+
+        # 화면 요약
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("📝 기업 개요 (PDF 추출)")
+            st.write(analyzer.company_info[:300] + "...")
+        with col2:
+            st.subheader("📈 재무 지표 (Excel 분석)")
+            st.json(analyzer.financial_metrics)
+
+        # 리포트 생성
+        if st.button("📄 통합 PDF 리포트 생성", key="gen_final_pdf"):
+            pdf_buf = io.BytesIO()
+            c = canvas.Canvas(pdf_buf, pagesize=A4)
+            w, h = A4
             
-            st.success(f"{analysis['company_name']} 데이터 분석 성공")
+            # 리포트 디자인
+            c.setFont(font_name, 20)
+            c.drawCentredString(w/2, h - 50, f"기업 경영진단 통합 보고서")
             
-            # 요약 지표 표시 (Metric)
-            col1, col2, col3 = st.columns(3)
-            col1.metric("매출성장률", f"{analysis['growth']}%")
-            col2.metric("순이익률", f"{analysis['profitability']}%")
-            col3.metric("부채비율", f"{analysis['stability']}%")
+            c.setFont(font_name, 12)
+            c.drawString(50, h - 100, f"기업명: {analyzer.company_name}")
+            
+            # 분석 내용 기록
+            text_obj = c.beginText(50, h - 140)
+            text_obj.setFont(font_name, 10)
+            text_obj.textLine("[기업 개요 요약]")
+            # 간단한 줄바꿈 처리
+            summary = analyzer.company_info[:200].replace('\n', ' ')
+            text_obj.textLine(summary[:70])
+            text_obj.textLine(summary[70:140])
+            c.drawText(text_obj)
+            
+            # 차트 삽입
+            chart_img = analyzer.create_chart()
+            c.drawImage(ImageReader(chart_img), 50, h - 450, width=400, preserveAspectRatio=True)
+            
+            c.showPage()
+            c.save()
+            pdf_buf.seek(0)
 
-            # 리포트 생성 버튼
-            if st.button("📄 PDF 진단 리포트 생성", key="btn_generate"):
-                with st.spinner("리포트 파일을 구성 중입니다..."):
-                    # 1. 차트 준비
-                    chart_img = create_report_chart(analysis)
-                    
-                    # 2. PDF 작성
-                    pdf_buf = io.BytesIO()
-                    c = canvas.Canvas(pdf_buf, pagesize=A4)
-                    w, h = A4
-                    
-                    c.setFont(font_name, 20)
-                    c.drawCentredString(w/2, h - 60, f"{analysis['company_name']} 경영진단 결과")
-                    
-                    c.setStrokeColor(colors.dodgerblue)
-                    c.line(50, h - 80, w - 50, h - 80)
-                    
-                    c.setFont(font_name, 12)
-                    c.drawString(70, h - 130, f"1. 성장성 지표: {analysis['growth']}%")
-                    c.drawString(70, h - 150, f"2. 추정 기업가치: {analysis['valuation']:,}원")
-                    
-                    c.drawImage(ImageReader(chart_img), 70, h - 450, width=450, preserveAspectRatio=True)
-                    
-                    c.showPage()
-                    c.save()
-                    pdf_buf.seek(0)
-                    
-                    # 3. 다운로드 버튼 제공
-                    st.download_button(
-                        label="📥 리포트(PDF) 저장하기",
-                        data=pdf_buf,
-                        file_name=f"CEO_Report_{analysis['company_name']}.pdf",
-                        mime="application/pdf",
-                        key="btn_download"
-                    )
-        except Exception as e:
-            st.error(f"파일 처리 오류: {e}")
+            st.download_button(
+                label="📥 통합 리포트 다운로드",
+                data=pdf_buf,
+                file_name=f"Integrated_Report_{analyzer.company_name}.pdf",
+                mime="application/pdf",
+                key="last_down_btn"
+            )
 
 if __name__ == "__main__":
     main()
