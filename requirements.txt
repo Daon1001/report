@@ -1,6 +1,4 @@
-streamlit
 pandas
-matplotlib
-fpdf2
-google-generativeai
 openpyxl
+matplotlib
+reportlab
