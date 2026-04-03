@@ -17,7 +17,8 @@ ALLOWED_USERS = [
     "ykim116@naver.com",
     "suphong@naver.com",
     "poiemaesthesia@naver.com",
-    "ygkim576459@naver.com"
+    "ygkim576459@naver.com",
+    "tchope0501@naver.com"
 ]
 
 
