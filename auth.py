@@ -14,9 +14,9 @@ ADMIN_EMAIL = "incheon00@gmail.com"
 
 # 🚀 추가: 무조건 승인 처리할 일반 사용자 이메일 목록을 여기에 작성하세요.
 ALLOWED_USERS = [
-    "ykim116@naver.com"
-    "suphong@naver.com"
-    "poiemaesthesia@naver.com"
+    "ykim116@naver.com",
+    "suphong@naver.com",
+    "poiemaesthesia@naver.com",
     "ygkim576459@naver.com"
 ]
 
