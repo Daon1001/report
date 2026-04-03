@@ -12,6 +12,14 @@ from typing import Dict, List, Optional
 
 ADMIN_EMAIL = "incheon00@gmail.com"
 
+# 🚀 추가: 무조건 승인 처리할 일반 사용자 이메일 목록을 여기에 작성하세요.
+ALLOWED_USERS = [
+    "ykim116@naver.com",
+    "suphong@naver.com"
+    "poiemaesthesia@naver.com"
+    "ygkim576459@naver.com
+]
+
 
 def _get_gist_config():
     """Gist ID와 Token을 secrets에서 가져오기"""
@@ -92,6 +100,10 @@ def get_all_users() -> Dict:
 
 def request_approval(email: str, name: str, org: str) -> bool:
     """승인 요청 등록"""
+    # 🚀 강제 승인 명단 및 관리자 예외 처리
+    if email == ADMIN_EMAIL or email in ALLOWED_USERS:
+        return True
+        
     users = _load_users_from_gist()
     
     if email == ADMIN_EMAIL:
@@ -154,6 +166,10 @@ def delete_user(email: str) -> bool:
 
 def check_user_status(email: str) -> Optional[str]:
     """사용자 상태 확인 (approved/pending/rejected/None)"""
+    # 🚀 강제 승인 명단 및 관리자 예외 처리 (여기서 걸리면 바로 approved 반환)
+    if email == ADMIN_EMAIL or email in ALLOWED_USERS:
+        return "approved"
+        
     users = _load_users_from_gist()
     if email in users["users"]:
         return users["users"][email]["status"]
