@@ -19,7 +19,7 @@ ALLOWED_USERS = [
     "poiemaesthesia@naver.com",
     "ygkim576459@naver.com",
     "tchope0501@naver.com",
-    "tomaspjy@gamil.com"
+    "tomaspjy@gmail.com"
 ]
 
 
