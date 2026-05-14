@@ -1,3 +1,0 @@
-libffi-dev
-shared-mime-info
-libreoffice-calc
