@@ -221,3 +221,177 @@ def update_user_profile(email: str, name: str, org: str, title: str, phone: str)
         users["updated_at"] = datetime.datetime.now().isoformat()
         return _save_users_to_gist(users)
     return False
+
+
+# ════════════════════════════════════════════════════════════════
+# 사용량 추적 (Usage Tracking)
+# ════════════════════════════════════════════════════════════════
+def log_report_generation(
+    email: str,
+    company_name: str = "",
+    file_type: str = "unknown",   # 'corporate_tax_pdf' | 'personal_tax_pdf' | 'crehard_xlsx' | 'crehard_pdf'
+    is_personal: bool = False,
+    n_chapters: int = 0,
+    n_pages: int = 0,
+) -> bool:
+    """리포트 생성 시 사용 로그 기록.
+    Gist users_db.json 안에 usage_logs 배열 + usage_summary 객체로 저장.
+    최근 1000건만 유지 (오래된 로그는 자동 삭제).
+    """
+    if not email:
+        return False
+    
+    try:
+        users = _load_users_from_gist()
+        if "usage_logs" not in users:
+            users["usage_logs"] = []
+        if "usage_summary" not in users:
+            users["usage_summary"] = {"by_user": {}}
+        
+        now = datetime.datetime.now()
+        log_entry = {
+            "email": email,
+            "timestamp": now.isoformat(),
+            "company_name": company_name[:50] if company_name else "",  # 50자 제한
+            "file_type": file_type,
+            "is_personal": bool(is_personal),
+            "n_chapters": int(n_chapters),
+            "n_pages": int(n_pages),
+        }
+        users["usage_logs"].append(log_entry)
+        
+        # 최근 1000건만 유지
+        if len(users["usage_logs"]) > 1000:
+            users["usage_logs"] = users["usage_logs"][-1000:]
+        
+        # 사용자별 요약 업데이트
+        summary = users["usage_summary"]["by_user"]
+        if email not in summary:
+            summary[email] = {
+                "total": 0,
+                "this_month": 0,
+                "last_used": None,
+                "first_used": now.isoformat(),
+                "by_type": {},   # 파일 유형별 카운트
+                "month_key": now.strftime("%Y-%m"),
+            }
+        
+        u_sum = summary[email]
+        u_sum["total"] = int(u_sum.get("total", 0)) + 1
+        u_sum["last_used"] = now.isoformat()
+        
+        # 월별 카운트: 월이 바뀌면 this_month 리셋
+        current_month = now.strftime("%Y-%m")
+        if u_sum.get("month_key") != current_month:
+            u_sum["month_key"] = current_month
+            u_sum["this_month"] = 1
+        else:
+            u_sum["this_month"] = int(u_sum.get("this_month", 0)) + 1
+        
+        # 파일 유형별 카운트
+        u_sum["by_type"] = u_sum.get("by_type", {})
+        u_sum["by_type"][file_type] = int(u_sum["by_type"].get(file_type, 0)) + 1
+        
+        users["updated_at"] = now.isoformat()
+        return _save_users_to_gist(users)
+    except Exception as e:
+        print(f"사용 로그 저장 실패: {e}")
+        return False
+
+
+def get_user_usage_stats(email: str) -> Dict:
+    """특정 사용자의 사용량 통계"""
+    users = _load_users_from_gist()
+    summary = users.get("usage_summary", {}).get("by_user", {}).get(email, {})
+    if not summary:
+        return {"total": 0, "this_month": 0, "last_used": None, "by_type": {}}
+    
+    # 월 키 확인 — 사용 안 한 새 달이면 this_month 0으로 표시
+    import datetime as _dt
+    current_month = _dt.datetime.now().strftime("%Y-%m")
+    if summary.get("month_key") != current_month:
+        # 표시할 때만 0으로 변경 (저장은 그대로)
+        summary = dict(summary)
+        summary["this_month"] = 0
+    
+    return summary
+
+
+def get_all_usage_logs(limit: int = 200) -> List[Dict]:
+    """전체 사용 로그 (최신순, 기본 200건)"""
+    users = _load_users_from_gist()
+    logs = users.get("usage_logs", [])
+    return list(reversed(logs[-limit:]))
+
+
+def get_all_usage_summary() -> Dict[str, Dict]:
+    """전체 사용자별 사용량 요약 (관리자용).
+    Returns: {email: {total, this_month, last_used, by_type, ...}}
+    """
+    users = _load_users_from_gist()
+    summary = users.get("usage_summary", {}).get("by_user", {})
+    
+    # this_month 보정
+    import datetime as _dt
+    current_month = _dt.datetime.now().strftime("%Y-%m")
+    result = {}
+    for email, info in summary.items():
+        info = dict(info)
+        if info.get("month_key") != current_month:
+            info["this_month"] = 0
+        result[email] = info
+    return result
+
+
+def usage_to_dataframe():
+    """사용량 통계를 DataFrame으로 변환 (엑셀 다운로드용)"""
+    import pandas as pd
+    users = _load_users_from_gist()
+    user_list = users.get("users", {})
+    summary = get_all_usage_summary()
+    
+    rows = []
+    # 전체 등록된 사용자 + 화이트리스트 + 관리자 모두 포함
+    all_emails = set(user_list.keys()) | set(summary.keys()) | {ADMIN_EMAIL} | set(ALLOWED_USERS)
+    for email in sorted(all_emails):
+        user_info = user_list.get(email, {})
+        usage = summary.get(email, {})
+        by_type = usage.get("by_type", {}) or {}
+        rows.append({
+            "이메일": email,
+            "이름": user_info.get("name", ""),
+            "소속": user_info.get("org", ""),
+            "총 사용횟수": usage.get("total", 0),
+            "이번달 사용": usage.get("this_month", 0),
+            "최근 사용일": (usage.get("last_used", "") or "")[:19].replace("T", " "),
+            "첫 사용일": (usage.get("first_used", "") or "")[:19].replace("T", " "),
+            "법인 PDF": by_type.get("corporate_tax_pdf", 0),
+            "개인사업자 PDF": by_type.get("personal_tax_pdf", 0),
+            "크레탑 자료": by_type.get("crehard_xlsx", 0) + by_type.get("crehard_pdf", 0),
+        })
+    # 총 사용횟수 많은 순으로 정렬
+    rows.sort(key=lambda r: -int(r["총 사용횟수"]))
+    return pd.DataFrame(rows)
+
+
+def usage_logs_to_dataframe():
+    """전체 사용 로그를 DataFrame으로 변환"""
+    import pandas as pd
+    logs = get_all_usage_logs(limit=1000)
+    rows = []
+    for log in logs:
+        rows.append({
+            "일시": (log.get("timestamp", "") or "")[:19].replace("T", " "),
+            "이메일": log.get("email", ""),
+            "기업명": log.get("company_name", ""),
+            "유형": "👤 개인사업자" if log.get("is_personal") else "🏢 법인",
+            "파일 종류": {
+                "corporate_tax_pdf": "법인 세무조정계산서",
+                "personal_tax_pdf": "개인사업자 세무조정계산서",
+                "crehard_xlsx": "크레탑 엑셀",
+                "crehard_pdf": "크레탑 PDF",
+            }.get(log.get("file_type", ""), log.get("file_type", "")),
+            "챕터수": log.get("n_chapters", 0),
+            "페이지수": log.get("n_pages", 0),
+        })
+    return pd.DataFrame(rows)
