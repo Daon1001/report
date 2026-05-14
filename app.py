@@ -8,6 +8,7 @@ import tempfile
 import os
 import sys
 import io
+import datetime
 
 # ── 경로 설정 (Streamlit Cloud 호환) ──
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,7 +22,9 @@ if PARENT_DIR not in sys.path:
 from auth import (
     ADMIN_EMAIL, request_approval, approve_user, reject_user, delete_user,
     check_user_status, is_admin, get_all_users, users_to_dataframe,
-    get_user_profile, update_user_profile, _get_gist_config
+    get_user_profile, update_user_profile, _get_gist_config,
+    log_report_generation, get_user_usage_stats, get_all_usage_summary,
+    usage_to_dataframe, usage_logs_to_dataframe,
 )
 
 st.set_page_config(page_title="재무경영진단 리포트 생성기", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
@@ -197,6 +200,85 @@ token = "여기에_GitHub_Token"
         st.download_button("📥 사용자 목록 엑셀 다운로드", data=buf, file_name="사용자_승인목록.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
+    # ════════════════════════════════════════
+    # 📊 사용량 통계 (Usage Analytics)
+    # ════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 📊 사용량 통계")
+    
+    usage_summary = get_all_usage_summary()
+    
+    if not usage_summary:
+        st.info("아직 리포트 생성 기록이 없습니다. 사용자가 리포트를 생성하면 여기에 통계가 표시됩니다.")
+    else:
+        # ─── 전체 핵심 지표 ───
+        total_reports = sum(int(u.get("total", 0)) for u in usage_summary.values())
+        total_this_month = sum(int(u.get("this_month", 0)) for u in usage_summary.values())
+        active_users = sum(1 for u in usage_summary.values() if int(u.get("total", 0)) > 0)
+        
+        # 가장 많이 쓴 사용자
+        top_user_email = max(usage_summary.keys(), key=lambda e: int(usage_summary[e].get("total", 0))) if usage_summary else "-"
+        top_user_count = int(usage_summary.get(top_user_email, {}).get("total", 0))
+        
+        mc = st.columns(4)
+        mc[0].metric("총 리포트 생성", f"{total_reports:,}건")
+        mc[1].metric("이번 달", f"{total_this_month:,}건")
+        mc[2].metric("활성 사용자", f"{active_users}명")
+        mc[3].metric("최다 사용자", f"{top_user_count}건", help=f"{top_user_email}")
+        
+        # ─── 사용자별 사용 횟수 테이블 ───
+        st.markdown("#### 🏆 사용자별 사용 횟수")
+        usage_df = usage_to_dataframe()
+        if not usage_df.empty:
+            # 0건인 사용자는 별도 옵션으로 숨김
+            show_zero = st.checkbox("0건 사용자도 표시", value=False, key="show_zero_users")
+            display_df = usage_df if show_zero else usage_df[usage_df["총 사용횟수"] > 0]
+            
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            
+            # 엑셀 다운로드
+            buf2 = io.BytesIO()
+            usage_df.to_excel(buf2, index=False, engine='openpyxl')
+            buf2.seek(0)
+            st.download_button("📥 사용량 통계 엑셀 다운로드", data=buf2,
+                file_name=f"사용량통계_{datetime.datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key="usage_download")
+        
+        # ─── 최근 사용 로그 ───
+        st.markdown("#### 📋 최근 사용 내역")
+        with st.expander("최근 200건 보기", expanded=False):
+            logs_df = usage_logs_to_dataframe()
+            if not logs_df.empty:
+                st.dataframe(logs_df, use_container_width=True, hide_index=True, height=400)
+                # 로그 엑셀 다운로드
+                buf3 = io.BytesIO()
+                logs_df.to_excel(buf3, index=False, engine='openpyxl')
+                buf3.seek(0)
+                st.download_button("📥 전체 사용 로그 엑셀", data=buf3,
+                    file_name=f"사용로그_{datetime.datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="logs_download")
+            else:
+                st.info("사용 로그 없음")
+        
+        # ─── 파일 유형별 분포 ───
+        st.markdown("#### 📁 파일 유형별 사용 분포")
+        type_counts = {"법인 PDF": 0, "개인사업자 PDF": 0, "크레탑 엑셀": 0, "크레탑 PDF": 0}
+        for u in usage_summary.values():
+            by_type = u.get("by_type", {}) or {}
+            type_counts["법인 PDF"] += int(by_type.get("corporate_tax_pdf", 0))
+            type_counts["개인사업자 PDF"] += int(by_type.get("personal_tax_pdf", 0))
+            type_counts["크레탑 엑셀"] += int(by_type.get("crehard_xlsx", 0))
+            type_counts["크레탑 PDF"] += int(by_type.get("crehard_pdf", 0))
+        
+        tc = st.columns(4)
+        tc[0].metric("🏢 법인 PDF", f"{type_counts['법인 PDF']}건")
+        tc[1].metric("👤 개인사업자 PDF", f"{type_counts['개인사업자 PDF']}건")
+        tc[2].metric("📊 크레탑 엑셀", f"{type_counts['크레탑 엑셀']}건")
+        tc[3].metric("📑 크레탑 PDF", f"{type_counts['크레탑 PDF']}건")
+
+    st.markdown("---")
     st.markdown("### 🗑️ 사용자 삭제")
     del_email = st.text_input("삭제할 이메일")
     if st.button("삭제") and del_email:
@@ -269,6 +351,23 @@ def _report_ui():
         # 리포트에 표시될 작성자 정보 조합
         author_display = f"{author_name} {author_title}".strip() if author_title else author_name
         author_org_display = author_org
+        
+        # ── 내 사용량 표시 ──
+        try:
+            my_stats = get_user_usage_stats(st.session_state.user_email)
+            my_total = int(my_stats.get("total", 0))
+            my_month = int(my_stats.get("this_month", 0))
+            last_used = (my_stats.get("last_used") or "")[:10]  # 날짜만
+            if my_total > 0:
+                st.markdown(f"""
+                <div style='background:linear-gradient(135deg,#0F2847,#1B3A6B);color:white;padding:10px 14px;border-radius:8px;margin-top:8px;font-size:12px;line-height:1.5;'>
+                    <div style='font-weight:700;color:#C9A961;font-size:11px;letter-spacing:0.5px;margin-bottom:4px;'>📊 내 사용 현황</div>
+                    <div>📑 총 <strong>{my_total}</strong>건 생성 &nbsp;|&nbsp; 이번 달 <strong>{my_month}</strong>건</div>
+                    {f"<div style='font-size:11px;opacity:0.85;margin-top:2px;'>최근: {last_used}</div>" if last_used else ""}
+                </div>
+                """, unsafe_allow_html=True)
+        except Exception:
+            pass
         
         st.markdown("---")
         st.header("📁 파일 업로드")
@@ -1050,6 +1149,34 @@ def _report_ui():
                         ratios=ratios, valuation=valuation, credit=credit,
                         author_name=author_display, author_org=author_org_display, author_phone=author_phone,
                         sim_params=sim_params, selected_pages=selected_pages, tax_deep=tax_deep)
+                    
+                    # ─── 사용량 로그 기록 ───
+                    try:
+                        # 파일 종류 식별
+                        if has_tax_doc:
+                            file_type_log = "personal_tax_pdf" if is_personal else "corporate_tax_pdf"
+                        elif file_map.get("overview") and file_map["overview"].name.lower().endswith(('.xls', '.xlsx')):
+                            file_type_log = "crehard_xlsx"
+                        else:
+                            file_type_log = "crehard_pdf"
+                        
+                        # 선택된 큰 챕터 수만 카운트 (페이지별 토글은 제외)
+                        n_chap = sum(1 for k, v in selected_pages.items() 
+                                    if v and "." not in k and k != "is_personal")
+                        # 페이지 수 추정 (HTML class="page" 개수)
+                        n_pg = html.count('class="page ')
+                        
+                        log_report_generation(
+                            email=st.session_state.get("user_email", ""),
+                            company_name=company.get("기업명", ""),
+                            file_type=file_type_log,
+                            is_personal=is_personal,
+                            n_chapters=n_chap,
+                            n_pages=n_pg,
+                        )
+                    except Exception as _e:
+                        print(f"사용량 로그 기록 실패 (무시): {_e}")
+                    
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as f:
                         out = f.name
                     result = generate_pdf(html, out)
