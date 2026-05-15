@@ -352,22 +352,23 @@ def _report_ui():
         author_display = f"{author_name} {author_title}".strip() if author_title else author_name
         author_org_display = author_org
         
-        # ── 내 사용량 표시 ──
-        try:
-            my_stats = get_user_usage_stats(st.session_state.user_email)
-            my_total = int(my_stats.get("total", 0))
-            my_month = int(my_stats.get("this_month", 0))
-            last_used = (my_stats.get("last_used") or "")[:10]  # 날짜만
-            if my_total > 0:
-                st.markdown(f"""
-                <div style='background:linear-gradient(135deg,#0F2847,#1B3A6B);color:white;padding:10px 14px;border-radius:8px;margin-top:8px;font-size:12px;line-height:1.5;'>
-                    <div style='font-weight:700;color:#C9A961;font-size:11px;letter-spacing:0.5px;margin-bottom:4px;'>📊 내 사용 현황</div>
-                    <div>📑 총 <strong>{my_total}</strong>건 생성 &nbsp;|&nbsp; 이번 달 <strong>{my_month}</strong>건</div>
-                    {f"<div style='font-size:11px;opacity:0.85;margin-top:2px;'>최근: {last_used}</div>" if last_used else ""}
-                </div>
-                """, unsafe_allow_html=True)
-        except Exception:
-            pass
+        # ── 내 사용량 표시 (관리자에게만 노출) ──
+        if is_admin(st.session_state.user_email):
+            try:
+                my_stats = get_user_usage_stats(st.session_state.user_email)
+                my_total = int(my_stats.get("total", 0))
+                my_month = int(my_stats.get("this_month", 0))
+                last_used = (my_stats.get("last_used") or "")[:10]  # 날짜만
+                if my_total > 0:
+                    st.markdown(f"""
+                    <div style='background:linear-gradient(135deg,#0F2847,#1B3A6B);color:white;padding:10px 14px;border-radius:8px;margin-top:8px;font-size:12px;line-height:1.5;'>
+                        <div style='font-weight:700;color:#C9A961;font-size:11px;letter-spacing:0.5px;margin-bottom:4px;'>📊 내 사용 현황 <span style='background:#C9A961;color:#0F2847;padding:1px 6px;border-radius:8px;font-size:9px;margin-left:4px;'>관리자</span></div>
+                        <div>📑 총 <strong>{my_total}</strong>건 생성 &nbsp;|&nbsp; 이번 달 <strong>{my_month}</strong>건</div>
+                        {f"<div style='font-size:11px;opacity:0.85;margin-top:2px;'>최근: {last_used}</div>" if last_used else ""}
+                    </div>
+                    """, unsafe_allow_html=True)
+            except Exception:
+                pass
         
         st.markdown("---")
         st.header("📁 파일 업로드")
