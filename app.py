@@ -809,7 +809,13 @@ def _report_ui():
                 ratios = calculate_ratios(bs, isc)
                 valuation = calculate_valuation(bs, isc, shares=shares or None, par_value=par_value)
             years = bs.get("years", [])
-            yl = [y.replace("-12-31","년") for y in years]
+            # 연도 라벨: "2024-12-31"(str) / 2024(int) 모두 호환
+            yl = []
+            for y in years:
+                if isinstance(y, str):
+                    yl.append(y.replace("-12-31", "년"))
+                else:
+                    yl.append(f"{y}년")
             if years:
                 latest = years[-1] if not has_tax_doc else years[0]  # 세무조정계산서는 최신연도가 첫번째
                 # BS 키 호환: 자산총계 또는 자산
