@@ -8,27 +8,41 @@ HTML 템플릿 기반 리포트 생성 (WeasyPrint로 PDF 변환)
 sample.pdf의 디자인을 재현
 """
 
-def format_number(val, unit="천원") -> str:
-    """숫자를 포맷팅"""
+def format_number(val, unit="원") -> str:
+    """숫자를 포맷팅. 입력값은 원 단위 (가장 작은 단위).
+    
+    unit 옵션:
+    - "원": 그대로 (예: 2,959,470,276)
+    - "천원": 천원 단위로 (예: 2,959,470)
+    - "백만원": 백만원 단위로
+    - "억원": 억원 단위로 (예: 29.6억원) — 0.1 단위까지
+    - "%": 퍼센트
+    """
     if val is None:
         return "-"
     val = float(val)
-    if unit == "천원":
+    if unit == "원":
         return f"{val:,.0f}"
-    elif unit == "백만원":
+    elif unit == "천원":
         return f"{val/1000:,.0f}"
+    elif unit == "백만원":
+        return f"{val/1_000_000:,.0f}"
     elif unit == "억원":
-        v = val / 100000
-        return f"{v:,.1f}억원"
+        v = val / 100_000_000
+        # 단위에 맞게 소수점 자릿수 조절
+        if abs(v) >= 100:
+            return f"{v:,.0f}억원"
+        elif abs(v) >= 10:
+            return f"{v:,.1f}억원"
+        else:
+            return f"{v:,.2f}억원"
     elif unit == "%":
         return f"{val:.1f}%"
-    elif unit == "원":
-        return f"{val:,.0f}원"
     return f"{val:,.0f}"
 
 
 def fn(val) -> str:
-    """천원 단위 숫자 포맷"""
+    """천원 단위로 표시 (값은 원 단위로 받음)"""
     return format_number(val, "천원")
 
 
@@ -745,10 +759,59 @@ def _company_overview_page(company: dict, is_personal: bool = False) -> str:
 """
 
 
+def _get_fin_value(data: dict, key: str, year):
+    """BS/IS 데이터에서 값 가져오기 - 두 가지 저장 형태 모두 지원 + 키 별칭 처리
+    - 형태 1 (크레탑): data[key][year] - 예: bs["유동자산"][2024]
+    - 형태 2 (세무조정계산서): data[year][key] - 예: bs[2024]["유동자산"]
+    값이 dict가 아니면 None 반환 (즉, 한 형태에서 실패하면 다른 형태 시도)
+    """
+    if not isinstance(data, dict):
+        return None
+    
+    # 키 별칭 (자주 쓰는 약어 → 정식 명칭)
+    aliases = {
+        "판관비": ["판매비와관리비", "판매관리비"],
+        "판매비와관리비": ["판매관리비", "판관비"],
+        "판매관리비": ["판매비와관리비", "판관비"],
+        "매출": ["매출액"],
+        "매출액": ["매출"],
+        "당기순이익": ["당기순손익"],
+        "당기순손익": ["당기순이익"],
+        "자산": ["자산총계"],
+        "자산총계": ["자산"],
+        "부채": ["부채총계"],
+        "부채총계": ["부채"],
+        "자본": ["자본총계"],
+        "자본총계": ["자본"],
+    }
+    
+    keys_to_try = [key] + aliases.get(key, [])
+    
+    for k in keys_to_try:
+        # 형태 1: data[k][year]
+        val1 = data.get(k)
+        if isinstance(val1, dict):
+            v = val1.get(year)
+            if v is not None and not isinstance(v, dict):
+                return v
+        # 형태 2: data[year][k]
+        val2 = data.get(year)
+        if isinstance(val2, dict):
+            v = val2.get(k)
+            if v is not None:
+                return v
+    return None
+
+
 def _balance_sheet_page(bs: dict, years: list, year_labels: list) -> str:
-    def row(label, key, indent=False):
+    def row(label, key, indent=False, hide_if_empty=False):
+        """hide_if_empty=True 이면 모든 연도에 데이터 없을 때 행 자체 생략"""
+        if hide_if_empty:
+            has_data = any(_get_fin_value(bs, key, y) is not None for y in years)
+            if not has_data:
+                return ""
         cls = ' class="indent"' if indent else ''
-        cells = "".join(f"<td class='num'>{fn(bs.get(key, {}).get(y))}</td>" for y in years)
+        cells = "".join(f"<td class='num'>{fn(_get_fin_value(bs, key, y))}</td>" for y in years)
         return f"<tr><td{cls}>{label}</td>{cells}</tr>"
     
     return f"""
@@ -767,13 +830,13 @@ def _balance_sheet_page(bs: dict, years: list, year_labels: list) -> str:
                         <tr><th class="col-label">자산</th>{"".join(f'<th class="col-year">{yl}</th>' for yl in year_labels)}</tr>
                     </thead>
                     <tbody>
-                        {row("자산", "자산")}
-                        {row("유동자산", "유동자산", True)}
-                        {row("현금및현금성자산", "현금및현금성자산", True)}
-                        {row("매출채권", "매출채권", True)}
-                        {row("재고자산", "재고자산", True)}
-                        {row("비유동자산", "비유동자산", True)}
-                        {row("유형자산", "유형자산", True)}
+                        {row("자산총계", "자산")}
+                        {row("　유동자산", "유동자산", True)}
+                        {row("　　현금및현금성자산", "현금및현금성자산", True, hide_if_empty=True)}
+                        {row("　　매출채권", "매출채권", True, hide_if_empty=True)}
+                        {row("　　재고자산", "재고자산", True, hide_if_empty=True)}
+                        {row("　비유동자산", "비유동자산", True)}
+                        {row("　　유형자산", "유형자산", True, hide_if_empty=True)}
                     </tbody>
                 </table>
             </div>
@@ -783,13 +846,13 @@ def _balance_sheet_page(bs: dict, years: list, year_labels: list) -> str:
                         <tr><th class="col-label">부채 및 자본</th>{"".join(f'<th class="col-year">{yl}</th>' for yl in year_labels)}</tr>
                     </thead>
                     <tbody>
-                        {row("부채", "부채")}
-                        {row("유동부채", "유동부채", True)}
-                        {row("매입채무", "매입채무", True)}
-                        {row("비유동부채", "비유동부채", True)}
-                        {row("자본", "자본")}
-                        {row("자본금", "자본금", True)}
-                        {row("이익잉여금", "이익잉여금", True)}
+                        {row("부채총계", "부채")}
+                        {row("　유동부채", "유동부채", True)}
+                        {row("　　매입채무", "매입채무", True, hide_if_empty=True)}
+                        {row("　비유동부채", "비유동부채", True)}
+                        {row("자본총계", "자본")}
+                        {row("　자본금", "자본금", True, hide_if_empty=True)}
+                        {row("　이익잉여금", "이익잉여금", True, hide_if_empty=True)}
                     </tbody>
                 </table>
             </div>
@@ -800,13 +863,21 @@ def _balance_sheet_page(bs: dict, years: list, year_labels: list) -> str:
 
 
 def _income_statement_page(isc: dict, years: list, year_labels: list) -> str:
-    def row(label, key, indent=False, bold=False):
+    def row(label, key, indent=False, bold=False, hide_if_empty=False):
+        """hide_if_empty=True 이면 모든 연도에 데이터 없을 때 행 자체 생략"""
+        if hide_if_empty:
+            has_data = any(_get_fin_value(isc, key, y) is not None for y in years)
+            if not has_data:
+                return ""
         cls_parts = []
         if indent: cls_parts.append("indent")
         if bold: cls_parts.append("bold-row")
         cls = f' class="{" ".join(cls_parts)}"' if cls_parts else ''
-        cells = "".join(f"<td class='num'>{fn(isc.get(key, {}).get(y))}</td>" for y in years)
+        cells = "".join(f"<td class='num'>{fn(_get_fin_value(isc, key, y))}</td>" for y in years)
         return f"<tr><td{cls}>{label}</td>{cells}</tr>"
+    
+    # 개인사업자 여부 판단 (법인세 항목 없으면 개인)
+    has_corp_tax = any(_get_fin_value(isc, "법인세비용", y) is not None for y in years)
     
     return f"""
 <div class="page content-page">
@@ -827,13 +898,13 @@ def _income_statement_page(isc: dict, years: list, year_labels: list) -> str:
                         {row("매출액", "매출액", bold=True)}
                         {row("매출원가", "매출원가", True)}
                         {row("매출총이익(손실)", "매출총이익")}
-                        {row("판매비와관리비", "판관비", True)}
-                        {row("급여", "급여", True)}
-                        {row("퇴직급여", "퇴직급여", True)}
-                        {row("복리후생비", "복리후생비", True)}
-                        {row("지급수수료", "지급수수료", True)}
-                        {row("감가상각비", "감가상각비", True)}
-                        {row("운반비", "운반비", True)}
+                        {row("판매비와관리비", "판매비와관리비", True)}
+                        {row("　급여", "급여", True, hide_if_empty=True)}
+                        {row("　퇴직급여", "퇴직급여", True, hide_if_empty=True)}
+                        {row("　복리후생비", "복리후생비", True, hide_if_empty=True)}
+                        {row("　지급수수료", "지급수수료", True, hide_if_empty=True)}
+                        {row("　감가상각비", "감가상각비", True, hide_if_empty=True)}
+                        {row("　운반비", "운반비", True, hide_if_empty=True)}
                         {row("영업이익(손실)", "영업이익", bold=True)}
                     </tbody>
                 </table>
@@ -846,8 +917,9 @@ def _income_statement_page(isc: dict, years: list, year_labels: list) -> str:
                     <tbody>
                         {row("영업외수익", "영업외수익")}
                         {row("영업외비용", "영업외비용")}
-                        {row("법인세차감전순이익", "법인세차감전순이익", bold=True)}
-                        {row("법인세비용", "법인세비용", True)}
+                        {row("법인세차감전순이익", "법인세차감전순이익", bold=True, hide_if_empty=True)}
+                        {row("법인세비용", "법인세비용", True, hide_if_empty=True)}
+                        {'<tr><td>　<span style="color:#888;font-size:11px;">(개인사업자: 종합소득세는 별도 신고)</span></td>' + "".join("<td></td>" for _ in years) + '</tr>' if not has_corp_tax else ''}
                         {row("당기순이익(순손실)", "당기순이익", bold=True)}
                     </tbody>
                 </table>
@@ -866,7 +938,7 @@ def _financial_summary_page(bs: dict, isc: dict, years: list, year_labels: list)
         ("매출액", "매출액", isc), ("영업이익", "영업이익", isc), ("당기순이익", "당기순이익", isc),
     ]
     for label, key, src in items:
-        cells = "".join(f"<td class='num'>{format_number(src.get(key, {}).get(y), '억원')}</td>" for y in years)
+        cells = "".join(f"<td class='num'>{format_number(_get_fin_value(src, key, y), '억원')}</td>" for y in years)
         rows += f"<tr><td class='bold-row'>{label}</td>{cells}</tr>\n"
     
     # 증가율 행
@@ -874,16 +946,16 @@ def _financial_summary_page(bs: dict, isc: dict, years: list, year_labels: list)
         cells = ""
         for i, y in enumerate(years):
             if "증가율" in label and i > 0:
-                curr = src.get(key.replace("증가율", ""), {}).get(y)
-                prev = src.get(key.replace("증가율", ""), {}).get(years[i-1])
+                curr = _get_fin_value(src, key.replace("증가율", ""), y)
+                prev = _get_fin_value(src, key.replace("증가율", ""), years[i-1])
                 if curr and prev and prev != 0:
                     val = (curr - prev) / abs(prev) * 100
                     cells += f"<td class='num'>{val:.1f}%</td>"
                 else:
                     cells += "<td class='num'>-</td>"
             elif "이익률" in label:
-                rev = isc.get("매출액", {}).get(y)
-                op = isc.get("영업이익", {}).get(y)
+                rev = _get_fin_value(isc, "매출액", y)
+                op = _get_fin_value(isc, "영업이익", y)
                 if rev and op and rev != 0:
                     cells += f"<td class='num'>{op/rev*100:.1f}%</td>"
                 else:
@@ -1097,14 +1169,14 @@ def _expense_analysis_page(isc: dict, years: list, year_labels: list) -> str:
     for label, key in items:
         row = f"<tr><td class='bold-row'>{label}</td>"
         for y in years:
-            val = isc.get(key, {}).get(y)
+            val = _get_fin_value(isc, key, y)
             row += f"<td class='num'>{fn(val)}</td>"
         row += "</tr>\n"
         # 비율 행
         row += f"<tr><td class='indent'>({label}/매출액)</td>"
         for y in years:
-            val = isc.get(key, {}).get(y)
-            rev = isc.get("매출액", {}).get(y)
+            val = _get_fin_value(isc, key, y)
+            rev = _get_fin_value(isc, "매출액", y)
             if val and rev and rev != 0:
                 row += f"<td class='num'>{val/rev*100:.1f}%</td>"
             else:
@@ -1115,17 +1187,17 @@ def _expense_analysis_page(isc: dict, years: list, year_labels: list) -> str:
     # 매출액 행
     rows += f"<tr class='total-row'><td class='bold-row'>매출액</td>"
     for y in years:
-        rows += f"<td class='num'>{fn(isc.get('매출액', {}).get(y))}</td>"
+        rows += f"<td class='num'>{fn(_get_fin_value(isc, '매출액', y))}</td>"
     rows += "</tr>"
     
     # 최근 연도 경비율 그래프
     ly = years[-1] if years else ""
     lyl = year_labels[-1] if year_labels else ""
     exp_data = {}
-    rev = isc.get("매출액", {}).get(ly)
+    rev = _get_fin_value(isc, "매출액", ly)
     if rev and rev > 0:
         for label, key in items:
-            v = isc.get(key, {}).get(ly)
+            v = _get_fin_value(isc, key, ly)
             if v: exp_data[label] = v / rev * 100
     exp_chart = _svg_bar_chart(exp_data, f"매출 대비 경비율 ({lyl})", 320, 140, ["#1B3A6B","#A37C3E","#4A7BA8","#C9A961"])
     
@@ -1798,21 +1870,27 @@ def get_css() -> str:
 @page { size: 1330px 940px; margin: 0; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Pretendard Variable', Pretendard, 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Malgun Gothic', sans-serif; font-size: 14px; color: #3A2F1E; line-height: 1.55; background: #2B2416; display: flex; flex-direction: column; align-items: center; padding: 10px 0; letter-spacing: -0.15px; font-weight: 400; }
-.page { width: 1330px; height: 940px; page-break-after: always; page-break-inside: avoid; position: relative; overflow: hidden; background: linear-gradient(135deg, #FAF6EE 0%, #F5EDD9 100%); margin-bottom: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+.page { width: 1330px; min-height: 940px; page-break-after: always; page-break-inside: avoid; position: relative; overflow: visible; background: linear-gradient(135deg, #FAF6EE 0%, #F5EDD9 100%); margin-bottom: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
 .page::before { content: ''; position: absolute; inset: 0; background-image: radial-gradient(circle at 20% 80%, rgba(201,169,97,0.06) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(139,111,62,0.05) 0%, transparent 50%); pointer-events: none; z-index: 0; }
 .page > * { position: relative; z-index: 1; }
 
 @media print {
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
     body { background: white !important; padding: 0 !important; }
-    .page { height: 940px; overflow: hidden; margin-bottom: 0; box-shadow: none; page-break-after: always; page-break-inside: avoid; background: linear-gradient(135deg, #FAF6EE 0%, #F5EDD9 100%) !important; }
+    .page { width: 1330px; min-height: 940px; overflow: visible; margin-bottom: 0; box-shadow: none; page-break-after: always; page-break-inside: auto; background: linear-gradient(135deg, #FAF6EE 0%, #F5EDD9 100%) !important; }
     .page:last-child { page-break-after: avoid; }
     .cover-page { background: linear-gradient(135deg, #0A1628 0%, #0F2847 40%, #1B3A6B 100%) !important; }
     .section-divider { background: linear-gradient(135deg, #0A1628, #0F2847 50%, #1B3A6B) !important; }
     .divider-left { background: radial-gradient(ellipse at center, #13304F 0%, #0A1628 75%) !important; }
     .section-badge { background: linear-gradient(135deg, #8B6F3E 0%, #C9A961 50%, #8B6F3E 100%) !important; color: white !important; }
     .highlight-box { background: linear-gradient(135deg, #0F2847, #1B3A6B, #2C5282) !important; color: white !important; }
-    .data-table th { background: linear-gradient(135deg, #0F2847, #1B3A6B) !important; color: white !important; }
+    /* 표 헤더: 인쇄 시 배경 누락되어도 글자 보이게 어두운 글자색으로 fallback */
+    .data-table th, .data-table thead th, .labor-table thead th, table.financial-table th { 
+        background-color: #0F2847 !important; 
+        background: linear-gradient(135deg, #0F2847, #1B3A6B) !important; 
+        color: #ffffff !important; 
+        -webkit-text-fill-color: #ffffff !important;
+    }
     .data-table { background: rgba(255,251,240,0.6) !important; }
     .label-cell { background: rgba(201,169,97,0.12) !important; }
     .total-row td { background: linear-gradient(90deg, rgba(201,169,97,0.18), rgba(201,169,97,0.10)) !important; }
@@ -1888,11 +1966,12 @@ body { font-family: 'Pretendard Variable', Pretendard, 'Noto Sans KR', -apple-sy
 
 /* Tables - champagne cream tone */
 .data-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 12px; background: rgba(255,251,240,0.6); border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(139,111,62,0.08); }
-.data-table th { background: linear-gradient(135deg, #0F2847, #1B3A6B); color: white; padding: 11px 12px; text-align: center; font-weight: 700; font-size: 13px; letter-spacing: -0.2px; border-bottom: 2px solid #C9A961; }
+.data-table th { background-color: #0F2847; background: linear-gradient(135deg, #0F2847, #1B3A6B); color: #ffffff; padding: 11px 12px; text-align: center; font-weight: 700; font-size: 13px; letter-spacing: -0.2px; border-bottom: 2px solid #C9A961; }
+.data-table .num { text-align: right; font-family: 'Pretendard Variable', 'Consolas', monospace; font-size: 14px; font-variant-numeric: tabular-nums; font-weight: 700; color: #0F2847; }
+.data-table th.num { color: #ffffff; }
 .data-table td { padding: 10px 12px; border-bottom: 1px solid rgba(201,169,97,0.2); text-align: center; color: #2B2416; font-weight: 500; }
 .data-table tr:last-child td { border-bottom: none; }
 .data-table tr:hover { background: rgba(249,241,220,0.5); }
-.data-table .num { text-align: right; font-family: 'Pretendard Variable', 'Consolas', monospace; font-size: 14px; font-variant-numeric: tabular-nums; font-weight: 700; color: #0F2847; }
 .data-table .bold-row { font-weight: 700; background: rgba(201,169,97,0.10); text-align: left; color: #0F2847; }
 .data-table .total-row td { font-weight: 800; background: linear-gradient(90deg, rgba(201,169,97,0.18), rgba(201,169,97,0.10)); border-top: 2px solid #C9A961; color: #0F2847; font-size: 14px; }
 .label-cell { background: rgba(201,169,97,0.12) !important; font-weight: 700 !important; text-align: left !important; width: 140px; font-size: 13px; color: #0F2847 !important; letter-spacing: -0.2px; }
@@ -2520,15 +2599,15 @@ def _retained_earnings_page(bs: dict, isc: dict, years: list, year_labels: list)
     """미처분이익잉여금 분석"""
     rows = ""
     for y, yl in zip(years, year_labels):
-        ni = isc.get("당기순이익", {}).get(y)
-        re = bs.get("미처분이익잉여금", {}).get(y)
+        ni = _get_fin_value(isc, "당기순이익", y)
+        re = _get_fin_value(bs, "미처분이익잉여금", y)
         ni_str = format_number(ni, "억원") if ni else "-"
         re_str = format_number(re, "억원") if re else "-"
         rows += f"<tr><td class='bold-row'>{yl}</td><td class='num'>{ni_str}</td><td class='num'>{re_str}</td></tr>\n"
     
     # 미래 예측 (미처분이익잉여금 증가 추이)
-    latest_re = bs.get("미처분이익잉여금", {}).get(years[-1]) if years else 0
-    latest_ni = isc.get("당기순이익", {}).get(years[-1]) if years else 0
+    latest_re = _get_fin_value(bs, "미처분이익잉여금", years[-1]) if years else 0
+    latest_ni = _get_fin_value(isc, "당기순이익", years[-1]) if years else 0
     if latest_re is None: latest_re = 0
     if latest_ni is None: latest_ni = 0
     

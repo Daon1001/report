@@ -25,36 +25,72 @@ def safe_growth(curr, prev) -> Optional[float]:
     return round((curr - prev) / abs(prev) * 100, 2)
 
 
+def _gv(data, key, year):
+    """BS/IS 데이터 양방향 접근 + 키 별칭 (html_template._get_fin_value와 동일 로직)"""
+    if not isinstance(data, dict):
+        return None
+    aliases = {
+        "판관비": ["판매비와관리비", "판매관리비"],
+        "판매비와관리비": ["판매관리비", "판관비"],
+        "판매관리비": ["판매비와관리비", "판관비"],
+        "매출": ["매출액"],
+        "매출액": ["매출"],
+        "당기순이익": ["당기순손익"],
+        "자산": ["자산총계"],
+        "자산총계": ["자산"],
+        "부채": ["부채총계"],
+        "부채총계": ["부채"],
+        "자본": ["자본총계"],
+        "자본총계": ["자본"],
+    }
+    keys_to_try = [key] + aliases.get(key, [])
+    for k in keys_to_try:
+        # 형태 1: data[k][year]
+        val1 = data.get(k)
+        if isinstance(val1, dict):
+            v = val1.get(year)
+            if v is not None and not isinstance(v, dict):
+                return v
+        # 형태 2: data[year][k]
+        val2 = data.get(year)
+        if isinstance(val2, dict):
+            v = val2.get(k)
+            if v is not None:
+                return v
+    return None
+
+
 def calculate_ratios(bs: Dict, isc: Dict) -> Dict[str, Any]:
-    """재무비율 계산"""
+    """재무비율 계산 - 양방향 데이터 접근 지원"""
     years = bs.get("years", [])
     ratios = {"years": years}
     
     for year in years:
         yr = year
-        # BS 항목 (단위: 천원)
-        asset = bs.get("자산", {}).get(yr)
-        curr_asset = bs.get("유동자산", {}).get(yr)
-        non_curr_asset = bs.get("비유동자산", {}).get(yr)
-        liability = bs.get("부채", {}).get(yr)
-        curr_liability = bs.get("유동부채", {}).get(yr)
-        equity = bs.get("자본", {}).get(yr)
-        capital = bs.get("자본금", {}).get(yr)
-        inventory = bs.get("재고자산", {}).get(yr)
-        receivable = bs.get("매출채권", {}).get(yr)
-        payable = bs.get("매입채무", {}).get(yr)
+        # BS 항목
+        asset = _gv(bs, "자산", yr)
+        curr_asset = _gv(bs, "유동자산", yr)
+        non_curr_asset = _gv(bs, "비유동자산", yr)
+        liability = _gv(bs, "부채", yr)
+        curr_liability = _gv(bs, "유동부채", yr)
+        equity = _gv(bs, "자본", yr)
+        capital = _gv(bs, "자본금", yr)
+        inventory = _gv(bs, "재고자산", yr)
+        receivable = _gv(bs, "매출채권", yr)
+        payable = _gv(bs, "매입채무", yr)
         
         # IS 항목
-        revenue = isc.get("매출액", {}).get(yr)
-        cogs = isc.get("매출원가", {}).get(yr)
-        gross_profit = isc.get("매출총이익", {}).get(yr)
-        sga = isc.get("판관비", {}).get(yr)
-        op_income = isc.get("영업이익", {}).get(yr)
-        net_income = isc.get("당기순이익", {}).get(yr)
+        revenue = _gv(isc, "매출액", yr)
+        cogs = _gv(isc, "매출원가", yr)
+        gross_profit = _gv(isc, "매출총이익", yr)
+        sga = _gv(isc, "판관비", yr)
+        op_income = _gv(isc, "영업이익", yr)
+        net_income = _gv(isc, "당기순이익", yr)
         
         # ── 안정성 지표 ──
         ratios.setdefault("부채비율", {})[yr] = safe_pct(liability, equity)
         ratios.setdefault("유동비율", {})[yr] = safe_pct(curr_asset, curr_liability)
+        ratios.setdefault("자기자본비율", {})[yr] = safe_pct(equity, asset)
         ratios.setdefault("차입금의존도", {})[yr] = 0  # 차입금 별도 없으면 0
         
         # ── 수익성 지표 ──
@@ -76,15 +112,15 @@ def calculate_ratios(bs: Dict, isc: Dict) -> Dict[str, Any]:
         prev_yr = years[i - 1]
         
         ratios.setdefault("총자산증가율", {})[yr] = safe_growth(
-            bs.get("자산", {}).get(yr), bs.get("자산", {}).get(prev_yr))
+            _gv(bs, "자산", yr), _gv(bs, "자산", prev_yr))
         ratios.setdefault("매출액증가율", {})[yr] = safe_growth(
-            isc.get("매출액", {}).get(yr), isc.get("매출액", {}).get(prev_yr))
+            _gv(isc, "매출액", yr), _gv(isc, "매출액", prev_yr))
         ratios.setdefault("자기자본증가율", {})[yr] = safe_growth(
-            bs.get("자본", {}).get(yr), bs.get("자본", {}).get(prev_yr))
+            _gv(bs, "자본", yr), _gv(bs, "자본", prev_yr))
         ratios.setdefault("영업이익증가율", {})[yr] = safe_growth(
-            isc.get("영업이익", {}).get(yr), isc.get("영업이익", {}).get(prev_yr))
+            _gv(isc, "영업이익", yr), _gv(isc, "영업이익", prev_yr))
         ratios.setdefault("순이익증가율", {})[yr] = safe_growth(
-            isc.get("당기순이익", {}).get(yr), isc.get("당기순이익", {}).get(prev_yr))
+            _gv(isc, "당기순이익", yr), _gv(isc, "당기순이익", prev_yr))
     
     # 첫 해 성장성은 None
     if years:
@@ -138,8 +174,8 @@ def calculate_valuation(bs: Dict, isc: Dict, shares: int = None, par_value: int 
     latest_year = years[-1]
     
     # 자본 = 순자산가치
-    equity = bs.get("자본", {}).get(latest_year) or 0
-    capital_stock = bs.get("자본금", {}).get(latest_year) or 0
+    equity = _gv(bs, "자본", latest_year) or 0
+    capital_stock = _gv(bs, "자본금", latest_year) or 0
     
     # 주식수 추정 (자본금 / 액면가)
     if shares is None:
@@ -158,7 +194,7 @@ def calculate_valuation(bs: Dict, isc: Dict, shares: int = None, par_value: int 
     net_incomes = []
     weights = [1, 2, 3]  # 과거 → 최근 가중치
     for i, year in enumerate(years):
-        ni = isc.get("당기순이익", {}).get(year)
+        ni = _gv(isc, "당기순이익", year)
         if ni is not None:
             w = weights[i] if i < len(weights) else 3
             net_incomes.append((ni, w))

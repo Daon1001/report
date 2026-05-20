@@ -16,10 +16,17 @@ def _logo_header(LOGO_SMALL, section_badge, page_title):
 
 
 def _fmt(v, unit="원", placeholder="—"):
-    if v is None or v == 0:
+    if v is None:
         return placeholder
+    # float이지만 실제로는 정수값이면 정수처럼 표시
     if isinstance(v, float):
-        return f"{v:,.1f}{unit}"
+        if v == 0:
+            return f"0{unit}"
+        if v.is_integer():
+            return f"{int(v):,}{unit}"
+        return f"{v:,.0f}{unit}"
+    if v == 0:
+        return f"0{unit}"
     return f"{v:,}{unit}"
 
 
@@ -127,35 +134,35 @@ def personal_inheritance_tax_page(bs: dict, company: dict, LOGO_SMALL: str) -> s
         <h3 class="subsection-title" style="margin-top:16px;">◆ 상속세 시뮬레이션 - 3가지 시나리오</h3>
         <table class="data-table financial-table compact">
             <thead>
-                <tr>
-                    <th style="width:180px;">시나리오</th>
-                    <th class="num">상속재산</th>
-                    <th class="num">공제액</th>
-                    <th class="num">과세표준</th>
-                    <th class="num">상속세</th>
+                <tr style="background:#0F2847;color:white;">
+                    <th style="width:180px;background:#0F2847;color:white;padding:10px 12px;">시나리오</th>
+                    <th class="num" style="background:#0F2847;color:white;padding:10px 12px;">상속재산</th>
+                    <th class="num" style="background:#0F2847;color:white;padding:10px 12px;">공제액</th>
+                    <th class="num" style="background:#0F2847;color:white;padding:10px 12px;">과세표준</th>
+                    <th class="num" style="background:#0F2847;color:white;padding:10px 12px;">상속세</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
                     <td><strong>① 일반 상속</strong><br><span style="font-size:11px;color:#888;">기본공제만 적용</span></td>
                     <td class="num">{_fmt(net_estate)}</td>
-                    <td class="num">{_fmt(deduction_base)}</td>
+                    <td class="num">{_fmt(deduction_base)}<br><span style="font-size:10px;color:#888;">(기본공제)</span></td>
                     <td class="num">{_fmt(taxable_normal)}</td>
                     <td class="num" style="color:#C62828;font-weight:800;">{_fmt(tax_normal)}</td>
                 </tr>
                 <tr style="background:#E8F5E9;">
                     <td><strong>② 가업상속공제 적용</strong><br><span style="font-size:11px;color:#2E7D32;">10년+ 사업 영위 + 승계 시</span></td>
                     <td class="num">{_fmt(net_estate)}</td>
-                    <td class="num">{_fmt(deduction_base + gauk_max)}</td>
-                    <td class="num">{_fmt(taxable_with_gauk)}</td>
-                    <td class="num" style="color:#2E7D32;font-weight:800;">{_fmt(tax_with_gauk)}</td>
+                    <td class="num">{_fmt(deduction_base + gauk_max)}<br><span style="font-size:10px;color:#2E7D32;">(기본 {deduction_base/100_000_000:.0f}억 + 가업 {gauk_max/100_000_000:.1f}억)</span></td>
+                    <td class="num">{'<span style="color:#2E7D32;font-weight:700;">전액 공제</span>' if taxable_with_gauk == 0 else _fmt(taxable_with_gauk)}</td>
+                    <td class="num" style="color:#2E7D32;font-weight:800;">{'<span style="font-size:13px;">면제</span>' if tax_with_gauk == 0 else _fmt(tax_with_gauk)}</td>
                 </tr>
                 <tr style="background:#FFF8E1;">
                     <td><strong>③ ②+종신보험 재원</strong><br><span style="font-size:11px;color:#8B6F3E;">납부재원 부족 해결</span></td>
                     <td class="num">{_fmt(net_estate)}</td>
-                    <td class="num">{_fmt(deduction_base + gauk_max)}</td>
-                    <td class="num">{_fmt(taxable_with_gauk)}</td>
-                    <td class="num" style="color:#8B6F3E;font-weight:800;">{_fmt(tax_with_gauk)}<br><span style="font-size:10px;font-weight:600;">(보험금 {_fmt(insurance_amount,'원',placeholder='5억')}로 납부)</span></td>
+                    <td class="num">{_fmt(deduction_base + gauk_max)}<br><span style="font-size:10px;color:#8B6F3E;">(공제 + 보험금 활용)</span></td>
+                    <td class="num">{'<span style="color:#8B6F3E;font-weight:700;">전액 공제</span>' if taxable_with_gauk == 0 else _fmt(taxable_with_gauk)}</td>
+                    <td class="num" style="color:#8B6F3E;font-weight:800;">{'<span style="font-size:13px;">면제</span>' if tax_with_gauk == 0 else _fmt(tax_with_gauk)}<br><span style="font-size:10px;font-weight:600;">(보험금 {insurance_amount/100_000_000:.0f}억 재원 확보)</span></td>
                 </tr>
             </tbody>
         </table>

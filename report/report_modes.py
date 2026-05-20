@@ -183,12 +183,28 @@ def simple_dashboard_page(company: dict, bs: dict, isc: dict, ratios: dict,
     years = bs.get("years", [])
     latest = years[-1] if years else None
     
-    # 핵심 지표 추출
-    rev = isc.get(latest, {}).get("매출액", 0) if latest else 0
-    net = isc.get(latest, {}).get("당기순이익", 0) if latest else 0
-    asset = bs.get(latest, {}).get("자산총계", 0) if latest else 0
-    debt = bs.get(latest, {}).get("부채총계", 0) if latest else 0
-    capital = bs.get(latest, {}).get("자본총계", 0) if latest else 0
+    # 핵심 지표 추출 - 양방향 형태 지원 (bs[year][key] / bs[key][year] 둘 다)
+    def _gv(data, key, year):
+        """양방향 데이터 접근 헬퍼"""
+        if not isinstance(data, dict) or year is None:
+            return 0
+        # 형태 1: data[year][key]
+        v = data.get(year)
+        if isinstance(v, dict):
+            r = v.get(key)
+            if r is not None and not isinstance(r, dict):
+                return r
+        # 형태 2: data[key][year]
+        v = data.get(key)
+        if isinstance(v, dict):
+            return v.get(year, 0) or 0
+        return 0
+    
+    rev = _gv(isc, "매출액", latest)
+    net = _gv(isc, "당기순이익", latest)
+    asset = _gv(bs, "자산총계", latest) or _gv(bs, "자산", latest)
+    debt = _gv(bs, "부채총계", latest) or _gv(bs, "부채", latest)
+    capital = _gv(bs, "자본총계", latest) or _gv(bs, "자본", latest)
     
     # 비율
     debt_ratio = (debt / capital * 100) if capital > 0 else 0
