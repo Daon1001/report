@@ -283,6 +283,11 @@ def generate_report_html(company: dict, bs: dict, isc: dict, mfg: dict,
 <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
+/* 🚀 로고 base64를 CSS 변수로 한 번만 정의 — 파일 크기 3MB → 0.5MB */
+:root {{
+  --logo-small: url('{LOGO_SMALL}');
+  --logo-large: url('{LOGO_LARGE}');
+}}
 {get_css()}
 </style>
 {mode_css}
@@ -555,7 +560,17 @@ def generate_report_html(company: dict, bs: dict, isc: dict, mfg: dict,
 </body>
 </html>""")
     
-    return "".join(html_parts)
+    # 🚀 base64 로고 중복 제거: 모든 <img class="header-logo|cover-logo|divider-logo">를
+    # 빈 <div>로 변환. base64 데이터는 CSS 변수 :root에 1회만 정의됨.
+    # 효과: HTML 3MB → 0.5MB, 인쇄 미리보기 멈춤 현상 해결.
+    import re as _re
+    final_html = "".join(html_parts)
+    final_html = _re.sub(
+        r'<img\s+src="[^"]*"\s+class="(header-logo|cover-logo|divider-logo)"\s*alt="[^"]*"\s*/?>',
+        r'<div class="\1" aria-label="RSV"></div>',
+        final_html
+    )
+    return final_html
 
 
 def _cover_page(company_name, author_name, author_org, author_phone, is_personal: bool = False) -> str:
@@ -1911,7 +1926,7 @@ body { font-family: 'Pretendard Variable', Pretendard, 'Noto Sans KR', -apple-sy
 .cover-bg { padding: 60px 100px; color: white; height: 85%; position: relative; z-index: 2; display: flex; align-items: center; justify-content: center; }
 .cover-content { text-align: center; }
 .cover-logo-wrap { margin-bottom: 26px; display: flex; justify-content: center; }
-.cover-logo { width: 260px; height: 260px; filter: drop-shadow(0 8px 32px rgba(201,169,97,0.35)) drop-shadow(0 2px 8px rgba(0,0,0,0.4)); }
+.cover-logo { width: 260px; height: 260px; filter: drop-shadow(0 8px 32px rgba(201,169,97,0.35)) drop-shadow(0 2px 8px rgba(0,0,0,0.4)); background-image: var(--logo-large); background-size: contain; background-position: center; background-repeat: no-repeat; }
 .cover-brand { font-size: 82px; font-weight: 900; letter-spacing: 14px; background: linear-gradient(180deg, #F4D98A 0%, #C9A961 50%, #8B6F3E 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: #C9A961; line-height: 1; margin-bottom: 8px; text-indent: 14px; }
 .cover-subbrand { font-size: 17px; font-weight: 500; letter-spacing: 8px; color: rgba(201,169,97,0.9); margin-bottom: 20px; text-transform: uppercase; text-indent: 8px; }
 .cover-divider { width: 80px; height: 2px; background: linear-gradient(90deg, transparent, #C9A961, transparent); margin: 0 auto 28px; }
@@ -1940,7 +1955,7 @@ body { font-family: 'Pretendard Variable', Pretendard, 'Noto Sans KR', -apple-sy
 .section-divider { display: flex; background: linear-gradient(135deg, #0A1628, #0F2847 50%, #1B3A6B); }
 .divider-left { width: 45%; background: radial-gradient(ellipse at center, #13304F 0%, #0A1628 75%); position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; }
 .divider-left::after { content: ''; position: absolute; top: -50%; right: -20%; width: 200%; height: 200%; background: radial-gradient(ellipse, rgba(201,169,97,0.15) 0%, transparent 60%); pointer-events: none; }
-.divider-logo { width: 200px; height: 200px; filter: drop-shadow(0 6px 20px rgba(201,169,97,0.4)); position: relative; z-index: 2; }
+.divider-logo { width: 200px; height: 200px; filter: drop-shadow(0 6px 20px rgba(201,169,97,0.4)); position: relative; z-index: 2; background-image: var(--logo-large); background-size: contain; background-position: center; background-repeat: no-repeat; }
 .divider-brand { font-size: 44px; font-weight: 900; letter-spacing: 10px; background: linear-gradient(180deg, #F4D98A, #C9A961, #8B6F3E); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: #C9A961; position: relative; z-index: 2; text-indent: 10px; }
 .divider-right { width: 55%; display: flex; flex-direction: column; justify-content: center; padding: 0 80px; }
 .divider-line { width: 60px; height: 3px; background: linear-gradient(90deg, #C9A961, #8B6F3E); margin-bottom: 22px; border-radius: 2px; }
@@ -1951,7 +1966,7 @@ body { font-family: 'Pretendard Variable', Pretendard, 'Noto Sans KR', -apple-sy
 .content-page { padding: 0; }
 .page-header { display: flex; align-items: center; gap: 14px; padding: 18px 50px 14px; border-bottom: 1px solid rgba(201,169,97,0.35); position: relative; background: linear-gradient(180deg, rgba(201,169,97,0.08) 0%, transparent 100%); }
 .page-header::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 180px; height: 2px; background: linear-gradient(90deg, #C9A961 0%, #F4D98A 50%, transparent 100%); }
-.header-logo { width: 44px; height: 44px; flex-shrink: 0; border-radius: 50%; border: 2px solid #C9A961; object-fit: cover; background: white; box-shadow: 0 2px 8px rgba(201,169,97,0.3); }
+.header-logo { width: 44px; height: 44px; flex-shrink: 0; border-radius: 50%; border: 2px solid #C9A961; object-fit: cover; background: white; box-shadow: 0 2px 8px rgba(201,169,97,0.3); background-image: var(--logo-small); background-size: cover; background-position: center; background-repeat: no-repeat; box-sizing: border-box; }
 .section-badge { background: linear-gradient(135deg, #8B6F3E 0%, #C9A961 50%, #8B6F3E 100%); color: white; padding: 6px 15px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 2px; border: 1px solid rgba(244,217,138,0.5); text-transform: uppercase; box-shadow: 0 2px 6px rgba(139,111,62,0.25); }
 .page-title-main { font-size: 24px; font-weight: 800; color: #0F2847; letter-spacing: -0.4px; }
 .page-body { padding: 18px 50px; color: #3A2F1E; }
