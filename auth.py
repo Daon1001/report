@@ -35,8 +35,10 @@ def _get_gist_config():
         return None, None
 
 
-def _load_users_from_gist() -> Dict:
-    """Gist에서 사용자 DB 로드"""
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_users_from_gist_cached() -> Dict:
+    """Gist에서 사용자 DB 로드 — 30초 캐싱.
+    Streamlit rerun마다 Gist API를 다시 부르지 않게 막음."""
     gist_id, token = _get_gist_config()
     if not gist_id or not token:
         return _load_users_local()
@@ -52,6 +54,11 @@ def _load_users_from_gist() -> Dict:
         st.warning(f"Gist 연결 실패, 로컬 모드로 전환: {e}")
     
     return _load_users_local()
+
+
+def _load_users_from_gist() -> Dict:
+    """Gist에서 사용자 DB 로드 (캐시 wrapper)"""
+    return _load_users_from_gist_cached()
 
 
 def _save_users_to_gist(users: Dict) -> bool:
@@ -76,7 +83,14 @@ def _save_users_to_gist(users: Dict) -> bool:
             f"https://api.github.com/gists/{gist_id}",
             headers=headers, json=payload, timeout=10
         )
-        return resp.status_code == 200
+        ok = resp.status_code == 200
+        # 쓰기 성공 시 캐시 무효화 — 다음 읽기에서 최신 데이터 가져옴
+        if ok:
+            try:
+                _load_users_from_gist_cached.clear()
+            except Exception:
+                pass
+        return ok
     except Exception:
         return _save_users_local(users)
 
