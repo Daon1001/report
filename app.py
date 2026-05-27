@@ -27,6 +27,94 @@ from auth import (
     usage_to_dataframe, usage_logs_to_dataframe,
 )
 
+
+# ════════════════════════════════════════════════════════════════
+# 🚀 무거운 파싱 작업 캐싱 (30분 → 5분 패치)
+# Streamlit은 위젯 클릭 1번에 스크립트 전체를 재실행함.
+# 캐싱 없으면 챕터 체크박스 토글마다 세무조정 PDF를 다시 풀파싱.
+# 같은 파일에 대해선 첫 1회만 실행하고 이후는 메모리에서 반환.
+# ════════════════════════════════════════════════════════════════
+
+@st.cache_data(show_spinner=False, max_entries=10)
+def _cached_parse_tax_adjustment(file_bytes: bytes, file_name: str):
+    """법인 세무조정계산서 풀파싱 결과 캐시"""
+    from parsers.pdf_parser import parse_tax_adjustment_pdf
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        return parse_tax_adjustment_pdf(tmp_path)
+    finally:
+        try: os.unlink(tmp_path)
+        except: pass
+
+
+@st.cache_data(show_spinner=False, max_entries=10)
+def _cached_parse_personal_tax_adjustment(file_bytes: bytes, file_name: str):
+    """개인사업자 세무조정계산서 풀파싱 결과 캐시"""
+    from parsers.pdf_parser import parse_personal_tax_adjustment_pdf
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        return parse_personal_tax_adjustment_pdf(tmp_path)
+    finally:
+        try: os.unlink(tmp_path)
+        except: pass
+
+
+@st.cache_data(show_spinner=False, max_entries=10)
+def _cached_extract_tax_deep(file_bytes: bytes, file_name: str, is_personal: bool):
+    """세무 심층 진단 결과 캐시"""
+    from parsers.pdf_parser import extract_tax_deep_analysis, extract_personal_tax_deep_analysis
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        if is_personal:
+            return extract_personal_tax_deep_analysis(tmp_path)
+        else:
+            return extract_tax_deep_analysis(tmp_path)
+    finally:
+        try: os.unlink(tmp_path)
+        except: pass
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def _cached_detect_pdf_type(file_bytes: bytes, file_name: str):
+    """PDF 자동 판별 (법인/개인/unknown) — 15페이지 텍스트 추출 결과 캐시.
+    반환: (is_corp_doc, is_pers_doc, diagnostic_list)
+    """
+    from parsers.pdf_parser import is_tax_adjustment_pdf, is_personal_tax_adjustment_pdf
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        is_corp_doc = is_tax_adjustment_pdf(tmp_path)
+        is_pers_doc = is_personal_tax_adjustment_pdf(tmp_path)
+        diag = []
+        try:
+            import pdfplumber
+            with pdfplumber.open(tmp_path) as pdf:
+                sample = ""
+                for i in range(min(15, len(pdf.pages))):
+                    sample += (pdf.pages[i].extract_text() or "") + "\n"
+                diag = [
+                    ("법인세과세표준", "법인세과세표준" in sample),
+                    ("종합소득세", "종합소득세" in sample),
+                    ("과세표준확정신고", "과세표준확정신고" in sample),
+                    ("표준재무상태표", "표준재무상태표" in sample),
+                    ("표준손익계산서", "표준손익계산서" in sample),
+                    ("사업소득명세서", "사업소득명세서" in sample),
+                    ("세무조정계산서", "세무조정계산서" in sample),
+                ]
+        except Exception:
+            pass
+        return (is_corp_doc, is_pers_doc, diag)
+    finally:
+        try: os.unlink(tmp_path)
+        except: pass
+
 st.set_page_config(page_title="재무경영진단 리포트 생성기", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -397,36 +485,11 @@ def _report_ui():
                 # PDF는 세무조정계산서인지 먼저 체크
                 f.seek(0)
                 try:
-                    import tempfile
-                    from parsers.pdf_parser import is_tax_adjustment_pdf, is_personal_tax_adjustment_pdf
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-                        tmp.write(f.getvalue())
-                        tmp_path = tmp.name
-                    
-                    # 법인/개인 둘 다 체크
-                    is_corp_doc = is_tax_adjustment_pdf(tmp_path)
-                    is_pers_doc = is_personal_tax_adjustment_pdf(tmp_path)
-                    
-                    # 자동 인식 진단을 위한 키워드 검색 결과 수집
-                    try:
-                        import pdfplumber
-                        with pdfplumber.open(tmp_path) as pdf:
-                            sample = ""
-                            for i in range(min(15, len(pdf.pages))):
-                                sample += (pdf.pages[i].extract_text() or "") + "\n"
-                            tax_pdf_diagnostic = [
-                                ("법인세과세표준", "법인세과세표준" in sample),
-                                ("종합소득세", "종합소득세" in sample),
-                                ("과세표준확정신고", "과세표준확정신고" in sample),
-                                ("표준재무상태표", "표준재무상태표" in sample),
-                                ("표준손익계산서", "표준손익계산서" in sample),
-                                ("사업소득명세서", "사업소득명세서" in sample),
-                                ("세무조정계산서", "세무조정계산서" in sample),
-                            ]
-                    except Exception:
-                        pass
-                    
-                    os.unlink(tmp_path)
+                    # 🚀 캐시된 판별 함수 사용 — 같은 파일에 대해 1회만 실행
+                    file_bytes = f.getvalue()
+                    is_corp_doc, is_pers_doc, diag = _cached_detect_pdf_type(file_bytes, f.name)
+                    if diag:
+                        tax_pdf_diagnostic = diag
                     
                     if is_corp_doc:
                         tax_pdf_detected_type = 'corporate'
@@ -674,52 +737,52 @@ def _report_ui():
             with st.spinner("📊 분석 중..."):
                 if has_tax_doc:
                     # ─── 세무조정계산서 PDF 1개로 모든 데이터 추출 ───
-                    from parsers.pdf_parser import (
-                        parse_tax_adjustment_pdf, extract_tax_deep_analysis,
-                        is_personal_tax_adjustment_pdf, is_corporate_tax_adjustment_pdf,
-                        parse_personal_tax_adjustment_pdf, extract_personal_tax_deep_analysis,
-                    )
-                    tax_path = save_file(file_map["tax_adjustment"])
-                    saved_paths.append(tax_path)
+                    # 🚀 캐시된 파싱 사용 — 같은 파일에 대해 1회만 풀파싱, 이후는 메모리 적중
+                    tax_file = file_map["tax_adjustment"]
+                    tax_file.seek(0)
+                    _tax_bytes = tax_file.getvalue()
+                    tax_file.seek(0)
+                    _tax_name = tax_file.name
                     
-                    # 개인사업자 vs 법인 자동 판별 (1차) — 둘 다 엄격하게 체크
-                    is_corp_doc = is_corporate_tax_adjustment_pdf(tax_path)
-                    is_personal_doc = is_personal_tax_adjustment_pdf(tax_path)
+                    # 1차 판별은 detect_file_type에서 이미 한 결과 재활용
+                    # (tax_pdf_detected_type: 'corporate' | 'personal' | 'unknown')
+                    is_personal_doc = (tax_pdf_detected_type == 'personal')
+                    is_corp_doc = (tax_pdf_detected_type == 'corporate')
                     
                     # 사용자가 수동 강제 선택했으면 그게 최우선
                     if forced_mode == "force_personal":
                         st.info("📌 **사용자 강제 선택: 개인사업자 모드**")
-                        tax_data = parse_personal_tax_adjustment_pdf(tax_path)
-                        tax_deep = extract_personal_tax_deep_analysis(tax_path)
+                        tax_data = _cached_parse_personal_tax_adjustment(_tax_bytes, _tax_name)
+                        tax_deep = _cached_extract_tax_deep(_tax_bytes, _tax_name, True)
                         is_personal_doc = True
                     elif forced_mode == "force_corporate":
                         st.info("📌 **사용자 강제 선택: 법인 모드**")
-                        tax_data = parse_tax_adjustment_pdf(tax_path)
-                        tax_deep = extract_tax_deep_analysis(tax_path)
+                        tax_data = _cached_parse_tax_adjustment(_tax_bytes, _tax_name)
+                        tax_deep = _cached_extract_tax_deep(_tax_bytes, _tax_name, False)
                         is_personal_doc = False
                     # 자동 모드: 1순위 명확하게 개인사업자
                     elif is_personal_doc:
                         st.info("👤 **개인사업자 세무조정계산서**로 인식되었습니다. (종합소득세 신고)")
-                        tax_data = parse_personal_tax_adjustment_pdf(tax_path)
-                        tax_deep = extract_personal_tax_deep_analysis(tax_path)
+                        tax_data = _cached_parse_personal_tax_adjustment(_tax_bytes, _tax_name)
+                        tax_deep = _cached_extract_tax_deep(_tax_bytes, _tax_name, True)
                     # 2순위: 명확하게 법인
                     elif is_corp_doc:
-                        tax_data = parse_tax_adjustment_pdf(tax_path)
-                        tax_deep = extract_tax_deep_analysis(tax_path)
+                        tax_data = _cached_parse_tax_adjustment(_tax_bytes, _tax_name)
+                        tax_deep = _cached_extract_tax_deep(_tax_bytes, _tax_name, False)
                     # 3순위: 둘 다 명확하지 않음(unknown) - 양쪽 시도 후 데이터 많은 쪽 채택
                     else:
                         st.warning("⚠️ 알 수 없는 양식의 세무조정계산서입니다. 양쪽 파서로 시도해봅니다...")
                         
                         # 법인 파서 시도
                         try:
-                            corp_data = parse_tax_adjustment_pdf(tax_path)
+                            corp_data = _cached_parse_tax_adjustment(_tax_bytes, _tax_name)
                             corp_score = _count_extracted_data(corp_data)
                         except Exception:
                             corp_data, corp_score = None, 0
                         
                         # 개인 파서 시도
                         try:
-                            pers_data = parse_personal_tax_adjustment_pdf(tax_path)
+                            pers_data = _cached_parse_personal_tax_adjustment(_tax_bytes, _tax_name)
                             pers_score = _count_extracted_data(pers_data)
                         except Exception:
                             pers_data, pers_score = None, 0
@@ -727,12 +790,12 @@ def _report_ui():
                         if pers_score > corp_score and pers_score > 0:
                             st.info(f"👤 **개인사업자 모드로 진행** (개인 파서 추출 항목: {pers_score}개)")
                             tax_data = pers_data
-                            tax_deep = extract_personal_tax_deep_analysis(tax_path)
+                            tax_deep = _cached_extract_tax_deep(_tax_bytes, _tax_name, True)
                             is_personal_doc = True
                         elif corp_score > 0:
                             st.info(f"🏢 **법인 모드로 진행** (법인 파서 추출 항목: {corp_score}개)")
                             tax_data = corp_data
-                            tax_deep = extract_tax_deep_analysis(tax_path)
+                            tax_deep = _cached_extract_tax_deep(_tax_bytes, _tax_name, False)
                         else:
                             st.error("❌ **데이터 추출에 실패했습니다.** 이 PDF 양식은 현재 지원되지 않습니다.")
                             st.markdown("""
