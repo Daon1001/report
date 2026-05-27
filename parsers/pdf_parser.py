@@ -1073,12 +1073,27 @@ def parse_personal_tax_adjustment_pdf(filepath: str) -> Dict[str, Any]:
 
     try:
         with pdfplumber.open(filepath) as pdf:
-            # 0) 표지에서 과세연도(당기) 추출
+            # 0) 표지에서 과세연도(당기) 추출 — 한글/한자 양식 모두 대응
             cy = None
             cover = pdf.pages[0].extract_text() or ""
-            m = re.search(r'(\d{4})\s*년\s*\d{1,2}월\s*\d{1,2}일\s*부터\s*(\d{4})\s*년', cover)
+            # (1) 한글 양식: "...부터 2025년..." 종료 연도
+            m = re.search(r'(\d{4})\s*년\s*\d{1,2}\s*[월月]\s*\d{1,2}\s*[일日]\s*부터\s*(\d{4})\s*년', cover)
             if m:
                 cy = int(m.group(2))
+            # (2) 한자 양식: "至 2025年 12月 31日" (종료=당기)
+            if cy is None:
+                m = re.search(r'[至~]\s*(\d{4})\s*[年년]', cover)
+                if m:
+                    cy = int(m.group(1))
+            # (3) 폴백: "自 2025年" 시작연도
+            if cy is None:
+                m = re.search(r'[自]\s*(\d{4})\s*[年년]', cover)
+                if m:
+                    cy = int(m.group(1))
+            # (4) 최후 폴백: 표지에 있는 가장 큰 4자리 연도
+            if cy is None:
+                yrs = [int(y) for y in re.findall(r'(20\d{2})\s*[年년]?', cover)]
+                cy = max(yrs) if yrs else None
             if cy:
                 result["bs"]["years"] = [cy]
                 result["isc"]["years"] = [cy]
@@ -1268,11 +1283,16 @@ def parse_personal_tax_adjustment_pdf(filepath: str) -> Dict[str, Any]:
                     ("매출액", ["Ⅰ.매출액", "Ⅰ. 매출액"]),
                     ("매출원가", ["Ⅱ.매출원가", "Ⅱ. 매출원가"]),
                     ("매출총이익", ["Ⅲ.매출총이익", "Ⅲ. 매출총이익"]),
-                    ("판매관리비", ["Ⅳ.판매비와 관리비", "Ⅳ. 판매비와 관리비"]),
-                    ("영업이익", ["Ⅴ.영업손익", "Ⅴ. 영업손익"]),
-                    ("영업외수익", ["Ⅵ.영업외수익", "Ⅵ. 영업외수익"]),
-                    ("영업외비용", ["Ⅶ.영업외비용", "Ⅶ. 영업외비용"]),
-                    ("당기순이익", ["Ⅷ.당기순손익", "Ⅷ. 당기순손익"]),
+                    ("판매관리비", ["Ⅳ.판매비와관리비", "Ⅳ. 판매비와관리비",
+                                  "Ⅳ.판매비와 관리비", "Ⅳ. 판매비와 관리비"]),
+                    ("영업이익", ["Ⅴ.영업손익", "Ⅴ. 영업손익",
+                                "V.영업손익", "V. 영업손익"]),
+                    ("영업외수익", ["Ⅵ.영업외수익", "Ⅵ. 영업외수익",
+                                  "VI.영업외수익", "VI. 영업외수익"]),
+                    ("영업외비용", ["Ⅶ.영업외비용", "Ⅶ. 영업외비용",
+                                  "VII.영업외비용", "VII. 영업외비용"]),
+                    ("당기순이익", ["Ⅷ.당기순손익", "Ⅷ. 당기순손익",
+                                  "VIII.당기순손익", "VIII. 당기순손익"]),
                 ]
                 for key, label_variants in is_items:
                     found = False
@@ -1320,6 +1340,14 @@ def parse_personal_tax_adjustment_pdf(filepath: str) -> Dict[str, Any]:
                 **tax_summary,
             }
 
+            # 8) 다중 사업장 분리 추출 (사업장이 여러 개일 때 사업장별 섹션용)
+            try:
+                from parsers.multi_business_parser import parse_businesses
+                result["businesses"] = parse_businesses(pdf, cy)
+            except Exception as _e:
+                print(f"다중 사업장 파싱 실패(무시): {_e}")
+                result["businesses"] = []
+
     except Exception as e:
         import traceback
         print(f"개인사업자 PDF 파싱 오류: {e}")
@@ -1351,7 +1379,10 @@ def extract_personal_tax_deep_analysis(filepath: str) -> Dict[str, Any]:
         },
         "세무조정_익금산입": [],
         "세무조정_손금불산입": [],
-        "업무용차량": {"임직원전용보험가입": None, "운행기록작성": None, "손금산입액": None, "손금불산입액": None},
+        "업무용차량": {"보유대수": 0, "총비용": None, "업무사용비율": None,
+                    "임직원전용보험가입": None, "운행기록작성": None,
+                    "손금산입액": None, "손금불산입액": None},
+        "접대비": {"한도액": None, "지출액": None, "손금불산입": None},
         "중소기업": {"해당여부": False, "업종": ""},
         "통합고용세액공제": {"신청여부": False, "공제금액": None},
         "is_personal": True,
@@ -1438,7 +1469,8 @@ def extract_personal_tax_deep_analysis(filepath: str) -> Dict[str, Any]:
                             break
                         is_text += ptxt + "\n"
                     for line in is_text.split("\n"):
-                        for label in ["Ⅷ.당기순손익", "Ⅷ. 당기순손익"]:
+                        for label in ["Ⅷ.당기순손익", "Ⅷ. 당기순손익",
+                                      "VIII.당기순손익", "VIII. 당기순손익"]:
                             if label in line:
                                 v = _label_amount_in_line(line, label)
                                 if v:
@@ -1471,6 +1503,39 @@ def extract_personal_tax_deep_analysis(filepath: str) -> Dict[str, Any]:
                         result["업무용차량"]["임직원전용보험가입"] = True
                     if "운행기록" in t and ("작성" in t or "있음" in t):
                         result["업무용차량"]["운행기록작성"] = True
+
+                    # 차량 대수: 차량번호 패턴(예: 64보6764, 12나3456) 등장 개수
+                    plates = re.findall(r'\d{2,3}[가-힣]\d{4}', t)
+                    plates = list(dict.fromkeys(plates))  # 중복 제거
+                    if plates:
+                        result["업무용차량"]["보유대수"] = len(plates)
+
+                    # 업무사용비율 (100/365 형태가 보이면 100%)
+                    if "100" in t and "365" in t:
+                        result["업무용차량"]["업무사용비율"] = 100.0
+
+                    # 연간 총비용(합계): 페이지 내 가장 큰 금액(6자리 이상)
+                    nums = [_parse_amount(x) for x in re.findall(r'[\d,]{6,}', t)]
+                    nums = [n for n in nums if n and n > 100000]
+                    if nums:
+                        result["업무용차량"]["총비용"] = max(nums)
+                    break
+
+            # 접대비(기업업무추진비) 한도/지출/손금불산입
+            for i, page in enumerate(pdf.pages):
+                head = (page.extract_text() or "")[:200]
+                if "기업업무추진비" in head and "조정명세서" in head:
+                    t = page.extract_text() or ""
+                    tns = re.sub(r'\s+', '', t)  # 공백 제거본 (라벨 글자 사이 공백 대응)
+                    m = re.search(r'조정대상기업업무추진비해당금액[^\d]*([\d,]+)', tns)
+                    if m:
+                        result["접대비"]["지출액"] = _parse_amount(m.group(1))
+                    m = re.search(r'기업업무추진비한도액합계[^\d]*([\d,]+)', tns)
+                    if m:
+                        result["접대비"]["한도액"] = _parse_amount(m.group(1))
+                    m = re.search(r'기업업무추진비한도초과액[^\d]*([\d,]+)', tns)
+                    if m:
+                        result["접대비"]["손금불산입"] = _parse_amount(m.group(1))
                     break
 
     except Exception as e:
