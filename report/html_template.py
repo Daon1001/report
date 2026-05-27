@@ -279,14 +279,19 @@ def generate_report_html(company: dict, bs: dict, isc: dict, mfg: dict,
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<link rel="preconnect" href="https://cdn.jsdelivr.net">
-<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<!-- 🚀 외부 폰트 CDN 제거 — 인쇄 시 폰트 다운로드 대기로 미리보기가 멈추는 현상 방지.
+     시스템에 설치된 한글 폰트로 자연스럽게 폴백. -->
 <style>
 /* 🚀 로고 base64를 CSS 변수로 한 번만 정의 — 파일 크기 3MB → 0.5MB */
 :root {{
   --logo-small: url('{LOGO_SMALL}');
   --logo-large: url('{LOGO_LARGE}');
+}}
+/* 🚀 시스템 폰트 폴백 정의 — Pretendard가 있으면 사용, 없으면 OS 기본 한글 폰트 */
+body, html {{
+  font-family: 'Pretendard', 'Pretendard Variable', -apple-system, BlinkMacSystemFont,
+               'Noto Sans KR', 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo',
+               'Helvetica Neue', sans-serif !important;
 }}
 {get_css()}
 </style>
