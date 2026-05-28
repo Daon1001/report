@@ -1887,7 +1887,10 @@ def _insurance_inheritance_page() -> str:
 def get_css() -> str:
     """리포트 CSS - 봄 벚꽃 프리미엄 테마"""
     return """
-@page { size: 1330px 940px; margin: 0; }
+/* 🚀 인쇄용 페이지 크기: A4 가로 (297mm x 210mm).
+   기존 1330x940px 디자인 종횡비(1.415)가 A4 가로(1.414)와 거의 동일하므로
+   브라우저가 자동 축소 인쇄. 이전엔 비표준 크기여서 Edge 미리보기 멈춤. */
+@page { size: 297mm 210mm; margin: 0; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Pretendard Variable', Pretendard, 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Malgun Gothic', sans-serif; font-size: 14px; color: #3A2F1E; line-height: 1.55; background: #2B2416; display: flex; flex-direction: column; align-items: center; padding: 10px 0; letter-spacing: -0.15px; font-weight: 400; }
 .page { width: 1330px; min-height: 940px; page-break-after: always; page-break-inside: avoid; position: relative; overflow: visible; background: linear-gradient(135deg, #FAF6EE 0%, #F5EDD9 100%); margin-bottom: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
